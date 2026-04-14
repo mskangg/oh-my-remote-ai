@@ -1,0 +1,7 @@
+[
+  {
+    "channelId": "C_SLACK_REMOTE",
+    "projectRoot": "/absolute/path/to/your/project",
+    "projectLabel": "my-project"
+  }
+]

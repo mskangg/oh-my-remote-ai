@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --env-file=/Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.env.local /Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.claude/hooks/claude-stop-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --env-file=/Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.env.local /Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.claude/hooks/claude-stop-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --env-file=/Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.env.local /Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.claude/hooks/claude-stop-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --env-file=/Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.env.local /Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.claude/hooks/claude-stop-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --env-file=/Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.env.local /Users/mskangg/Workspace/slack-remote/.worktrees/remote-claude-code/.claude/hooks/claude-stop-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

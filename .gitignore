@@ -1,0 +1,5 @@
+/target/
+/.local/
+/.env.local
+/data/channel-projects.json
+.DS_Store

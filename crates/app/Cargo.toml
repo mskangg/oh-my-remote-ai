@@ -1,0 +1,22 @@
+[package]
+name = "rcc"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+application = { path = "../application" }
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json = "1"
+core-model = { path = "../core-model" }
+core-service = { path = "../core-service" }
+dotenvy = "0.15"
+runtime-local = { path = "../runtime-local" }
+session-store = { path = "../session-store" }
+transport-slack = { path = "../transport-slack" }
+
+[dev-dependencies]
+tempfile = "3"

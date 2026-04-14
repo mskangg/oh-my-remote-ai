@@ -1,0 +1,18 @@
+[package]
+name = "session-store"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"
+tokio.workspace = true
+uuid.workspace = true
+core-model = { path = "../core-model" }
+core-service = { path = "../core-service" }
+
+[dev-dependencies]
+tempfile = "3"

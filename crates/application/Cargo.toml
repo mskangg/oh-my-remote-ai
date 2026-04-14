@@ -1,0 +1,20 @@
+[package]
+name = "application"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+core-model = { path = "../core-model" }
+core-service = { path = "../core-service" }
+slack-morphism = { version = "2.19.0", features = ["hyper"] }
+thiserror.workspace = true
+transport-slack = { path = "../transport-slack" }
+url.workspace = true
+
+[dev-dependencies]
+session-store = { path = "../session-store" }
+tempfile = "3"
+tokio.workspace = true

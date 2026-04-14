@@ -1,0 +1,12 @@
+[package]
+name = "core-service"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+core-model = { path = "../core-model" }

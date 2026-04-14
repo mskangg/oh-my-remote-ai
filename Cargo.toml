@@ -1,0 +1,28 @@
+[workspace]
+members = [
+  "crates/application",
+  "crates/app",
+  "crates/core-model",
+  "crates/core-service",
+  "crates/policy",
+  "crates/runtime-local",
+  "crates/session-store",
+  "crates/transport-slack",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["mskangg"]
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+url = "2"

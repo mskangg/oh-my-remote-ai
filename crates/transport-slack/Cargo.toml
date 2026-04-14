@@ -1,0 +1,24 @@
+[package]
+name = "transport-slack"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono = "0.4"
+core-model = { path = "../core-model" }
+core-service = { path = "../core-service" }
+futures-util = "0.3"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http2", "webpki-tokio", "ring"] }
+serde.workspace = true
+serde_json = "1"
+session-store = { path = "../session-store" }
+slack-morphism = { version = "2.19.0", features = ["hyper"] }
+tokio.workspace = true
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

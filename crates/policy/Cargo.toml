@@ -1,0 +1,8 @@
+[package]
+name = "policy"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+core-model = { path = "../core-model" }
