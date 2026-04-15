@@ -482,6 +482,131 @@ mod tests {
             .contains("demo-project"));
     }
 
+    #[tokio::test]
+    async fn resolve_setup_input_only_prompts_for_missing_fields() {
+        let partial = setup::SetupInput {
+            slack_bot_token: Some("xoxb-ready".into()),
+            slack_signing_secret: None,
+            slack_app_token: None,
+            slack_allowed_user_id: Some("U123".into()),
+            channel_id: None,
+            project_root: Some("/tmp/project".into()),
+            project_label: None,
+        };
+
+        let mut prompter = setup::FakePrompter::new(vec![
+            setup::FakeAnswer::Secret("signing-secret".into()),
+            setup::FakeAnswer::Secret("xapp-app".into()),
+            setup::FakeAnswer::Prompt("C123".into()),
+            setup::FakeAnswer::Prompt("demo".into()),
+        ]);
+
+        let resolved = setup::resolve_setup_input(partial, false, &mut prompter)
+            .await
+            .expect("resolve input");
+
+        assert_eq!(resolved.slack_bot_token.as_deref(), Some("xoxb-ready"));
+        assert_eq!(resolved.slack_signing_secret.as_deref(), Some("signing-secret"));
+        assert_eq!(resolved.channel_id.as_deref(), Some("C123"));
+        assert!(!prompter.output().contains("SECRET:SLACK_BOT_TOKEN"));
+    }
+
+    #[test]
+    fn load_setup_input_from_json_file() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("setup.json");
+        fs::write(
+            &path,
+            r#"{
+  "slack_bot_token": "xoxb-json",
+  "slack_signing_secret": "signing-json",
+  "slack_app_token": "xapp-json",
+  "slack_allowed_user_id": "UJSON",
+  "channel_id": "CJSON",
+  "project_root": "/tmp/project",
+  "project_label": "json-project"
+}"#,
+        )
+        .expect("write json file");
+
+        let loaded = setup::load_setup_input_from_file(&path).expect("load setup input");
+        assert_eq!(loaded.channel_id.as_deref(), Some("CJSON"));
+        assert_eq!(loaded.project_label.as_deref(), Some("json-project"));
+    }
+
+    #[test]
+    fn env_overrides_json_values_for_setup_input() {
+        let previous = env::var_os("RCC_SETUP_CHANNEL_ID");
+        unsafe { env::set_var("RCC_SETUP_CHANNEL_ID", "CENV") };
+
+        let input = setup::apply_setup_env_overrides(setup::SetupInput {
+            channel_id: Some("CJSON".into()),
+            ..Default::default()
+        });
+
+        assert_eq!(input.channel_id.as_deref(), Some("CENV"));
+
+        match previous {
+            Some(value) => unsafe { env::set_var("RCC_SETUP_CHANNEL_ID", value) },
+            None => unsafe { env::remove_var("RCC_SETUP_CHANNEL_ID") },
+        }
+    }
+
+    #[tokio::test]
+    async fn non_interactive_setup_fails_fast_when_required_fields_are_missing() {
+        let mut prompter = setup::FakePrompter::new(vec![]);
+        let result = setup::resolve_setup_input(
+            setup::SetupInput {
+                slack_bot_token: Some("xoxb-ready".into()),
+                ..Default::default()
+            },
+            true,
+            &mut prompter,
+        )
+        .await;
+
+        let error = format!("{result:?}");
+        assert!(error.contains("missing required field"));
+        assert!(error.contains("slack_signing_secret"));
+    }
+
+    #[tokio::test]
+    async fn execute_setup_accepts_pre_resolved_input_without_prompting() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}")
+            .expect("write manifest");
+        fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude --settings .claude/claude-stop-hooks.json --dangerously-skip-permissions".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let input = setup::SetupInput {
+            slack_bot_token: Some("xoxb-bot".into()),
+            slack_signing_secret: Some("signing-secret".into()),
+            slack_app_token: Some("xapp-app".into()),
+            slack_allowed_user_id: Some("U123".into()),
+            channel_id: Some("C123".into()),
+            project_root: Some(workspace_root.display().to_string()),
+            project_label: Some("demo-project".into()),
+        };
+
+        let mut prompter = setup::FakePrompter::new(vec![]);
+        let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(fs::read_to_string(workspace_root.join(".env.local"))
+            .unwrap()
+            .contains("SLACK_BOT_TOKEN=xoxb-bot"));
+    }
+
     #[test]
     fn config_defaults_to_workspace_local_paths() {
         let previous = env::var_os("RCC_STATE_DB_PATH");

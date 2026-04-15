@@ -28,12 +28,27 @@ cargo run -p rcc -- doctor
 cargo run -p rcc
 ```
 
+## Automation-friendly setup
+
+```bash
+cargo run -p rcc -- setup --from-file docs/setup.example.json
+```
+
+Optional env overrides:
+- `RCC_SETUP_SLACK_BOT_TOKEN`
+- `RCC_SETUP_SLACK_SIGNING_SECRET`
+- `RCC_SETUP_SLACK_APP_TOKEN`
+- `RCC_SETUP_SLACK_ALLOWED_USER_ID`
+- `RCC_SETUP_CHANNEL_ID`
+- `RCC_SETUP_PROJECT_ROOT`
+- `RCC_SETUP_PROJECT_LABEL`
+
 ## Claude Code에게 맡길 때
 
 이 프로젝트의 사용자는 Claude Code에 익숙하다는 전제를 둡니다. 완전한 딸깍 설치가 아니더라도, 아래처럼 Claude Code에게 setup을 맡길 수 있어야 합니다.
 
 ```text
-이 저장소의 Slack 설정을 진행해줘. `slack/app-manifest.json` 경로를 써서 앱 생성 단계를 안내하고, `.env.local`에 필요한 값을 채우고, 마지막에 `cargo run -p rcc -- doctor`까지 실행해줘.
+이 저장소의 Slack 설정을 진행해줘. `slack/app-manifest.json` 경로를 써서 앱 생성 단계를 안내하고, 필요하면 `docs/setup.example.json`이나 `RCC_SETUP_*`로 값을 채우고, 마지막에 `cargo run -p rcc -- doctor`까지 실행해줘.
 ```
 
 ## 필요한 값

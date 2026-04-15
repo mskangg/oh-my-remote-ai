@@ -30,7 +30,7 @@ async fn main() {
             return;
         }
         CliCommand::Setup => {
-            if let Err(error) = run_setup(&config).await {
+            if let Err(error) = run_setup(&config, &args).await {
                 eprintln!("failed to complete setup: {error}");
                 std::process::exit(1);
             }

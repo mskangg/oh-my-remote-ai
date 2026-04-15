@@ -37,8 +37,16 @@
 
 ## Quickstart
 
+Human:
 ```bash
 cargo run -p rcc -- setup
+cargo run -p rcc -- doctor
+cargo run -p rcc
+```
+
+Automation / Claude / smoke:
+```bash
+cargo run -p rcc -- setup --from-file docs/setup.example.json
 cargo run -p rcc -- doctor
 cargo run -p rcc
 ```

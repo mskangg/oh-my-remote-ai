@@ -2,13 +2,52 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{bail, Context, Result};
 use dotenvy::from_path_override;
 
 use crate::{find_env_file, run_doctor, AppConfig, ChannelProjectRecord, DoctorCheck, JsonChannelProjectStore};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SetupInput {
+    pub slack_bot_token: Option<String>,
+    pub slack_signing_secret: Option<String>,
+    pub slack_app_token: Option<String>,
+    pub slack_allowed_user_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub project_root: Option<String>,
+    pub project_label: Option<String>,
+}
+
+impl SetupInput {
+    pub fn missing_fields(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if self.slack_bot_token.as_deref().unwrap_or("").is_empty() {
+            missing.push("slack_bot_token");
+        }
+        if self.slack_signing_secret.as_deref().unwrap_or("").is_empty() {
+            missing.push("slack_signing_secret");
+        }
+        if self.slack_app_token.as_deref().unwrap_or("").is_empty() {
+            missing.push("slack_app_token");
+        }
+        if self.slack_allowed_user_id.as_deref().unwrap_or("").is_empty() {
+            missing.push("slack_allowed_user_id");
+        }
+        if self.channel_id.as_deref().unwrap_or("").is_empty() {
+            missing.push("channel_id");
+        }
+        if self.project_root.as_deref().unwrap_or("").is_empty() {
+            missing.push("project_root");
+        }
+        if self.project_label.as_deref().unwrap_or("").is_empty() {
+            missing.push("project_label");
+        }
+        missing
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupPrerequisites {
@@ -57,6 +96,41 @@ pub fn collect_setup_prerequisites(config: &AppConfig, workspace_root: &Path) ->
         env_exists: find_env_file(workspace_root).is_some(),
         mapping_exists: config.channel_project_store_path.exists(),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupCliOptions {
+    pub from_file: Option<PathBuf>,
+    pub non_interactive: bool,
+}
+
+pub fn parse_setup_cli_options(args: &[String]) -> SetupCliOptions {
+    let mut from_file = None;
+    let mut non_interactive = false;
+    let mut index = 2;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--from-file" => {
+                if let Some(next) = args.get(index + 1) {
+                    from_file = Some(PathBuf::from(next));
+                    non_interactive = true;
+                    index += 2;
+                } else {
+                    break;
+                }
+            }
+            "--non-interactive" => {
+                non_interactive = true;
+                index += 1;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+
+    SetupCliOptions { from_file, non_interactive }
 }
 
 pub trait SetupPrompter {
@@ -198,6 +272,39 @@ pub fn write_channel_project_records(path: &Path, records: &[ChannelProjectRecor
     Ok(())
 }
 
+pub fn load_setup_input_from_file(path: &Path) -> Result<SetupInput> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read setup file: {}", path.display()))?;
+    let input: SetupInput = serde_json::from_str(&raw)
+        .with_context(|| format!("parse setup file: {}", path.display()))?;
+    Ok(input)
+}
+
+pub fn apply_setup_env_overrides(mut input: SetupInput) -> SetupInput {
+    if let Ok(value) = std::env::var("RCC_SETUP_SLACK_BOT_TOKEN") {
+        input.slack_bot_token = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_SLACK_SIGNING_SECRET") {
+        input.slack_signing_secret = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_SLACK_APP_TOKEN") {
+        input.slack_app_token = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_SLACK_ALLOWED_USER_ID") {
+        input.slack_allowed_user_id = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_CHANNEL_ID") {
+        input.channel_id = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_PROJECT_ROOT") {
+        input.project_root = Some(value);
+    }
+    if let Ok(value) = std::env::var("RCC_SETUP_PROJECT_LABEL") {
+        input.project_label = Some(value);
+    }
+    input
+}
+
 pub fn validate_project_root(project_root: &str) -> Result<()> {
     let path = Path::new(project_root);
     if !path.is_absolute() {
@@ -249,6 +356,89 @@ pub fn format_setup_doctor_failures(checks: &[DoctorCheck]) -> String {
     lines.join("\n")
 }
 
+pub async fn resolve_setup_input(
+    mut input: SetupInput,
+    non_interactive: bool,
+    prompter: &mut dyn SetupPrompter,
+) -> Result<SetupInput> {
+    if non_interactive {
+        let missing = input.missing_fields();
+        if !missing.is_empty() {
+            bail!(format!(
+                "missing required fields for non-interactive setup: {}. Fill them via --from-file or RCC_SETUP_*.",
+                missing.join(", ")
+            ));
+        }
+        return Ok(input);
+    }
+
+    if input.slack_bot_token.is_none() {
+        input.slack_bot_token = Some(prompter.prompt_secret("SLACK_BOT_TOKEN")?);
+    }
+    if input.slack_signing_secret.is_none() {
+        input.slack_signing_secret = Some(prompter.prompt_secret("SLACK_SIGNING_SECRET")?);
+    }
+    if input.slack_app_token.is_none() {
+        input.slack_app_token = Some(prompter.prompt_secret("SLACK_APP_TOKEN")?);
+    }
+    if input.slack_allowed_user_id.is_none() {
+        input.slack_allowed_user_id = Some(prompter.prompt("SLACK_ALLOWED_USER_ID")?);
+    }
+    if input.channel_id.is_none() {
+        input.channel_id = Some(prompter.prompt("channelId")?);
+    }
+    if input.project_root.is_none() {
+        input.project_root = Some(prompter.prompt("projectRoot")?);
+    }
+    if input.project_label.is_none() {
+        input.project_label = Some(prompter.prompt("projectLabel")?);
+    }
+    Ok(input)
+}
+
+pub async fn execute_setup(
+    config: &AppConfig,
+    workspace_root: &Path,
+    input: SetupInput,
+    prompter: &mut dyn SetupPrompter,
+) -> Result<()> {
+    let project_root = input.project_root.as_deref().context("missing project_root")?;
+    validate_project_root(project_root)?;
+
+    let env_path = workspace_root.join(".env.local");
+    write_env_updates(
+        &env_path,
+        &[
+            ("SLACK_BOT_TOKEN", input.slack_bot_token.as_deref().context("missing slack_bot_token")?),
+            ("SLACK_SIGNING_SECRET", input.slack_signing_secret.as_deref().context("missing slack_signing_secret")?),
+            ("SLACK_APP_TOKEN", input.slack_app_token.as_deref().context("missing slack_app_token")?),
+            ("SLACK_ALLOWED_USER_ID", input.slack_allowed_user_id.as_deref().context("missing slack_allowed_user_id")?),
+        ],
+    )?;
+    let _ = from_path_override(&env_path);
+
+    let store = JsonChannelProjectStore::new(config.channel_project_store_path.clone());
+    let mut records = store.load()?;
+    upsert_channel_project_record(
+        &mut records,
+        ChannelProjectRecord {
+            channel_id: input.channel_id.context("missing channel_id")?,
+            project_root: project_root.to_string(),
+            project_label: input.project_label.context("missing project_label")?,
+        },
+    );
+    write_channel_project_records(&config.channel_project_store_path, &records)?;
+
+    let checks = run_doctor(config, workspace_root);
+    print_doctor_summary(prompter, &checks);
+    if checks.iter().all(|check| check.ok) {
+        prompter.println("Setup complete. You can now run: cargo run -p rcc");
+        Ok(())
+    } else {
+        bail!(format_setup_doctor_failures(&checks))
+    }
+}
+
 pub async fn run_setup_with_prompter(
     config: &AppConfig,
     workspace_root: &Path,
@@ -265,51 +455,33 @@ pub async fn run_setup_with_prompter(
     prompter.println("Slack link: https://api.slack.com/apps?new_app=1");
     prompter.confirm("Slack app 생성이 끝났으면 Enter를 누르세요.")?;
 
-    let bot_token = prompter.prompt_secret("SLACK_BOT_TOKEN")?;
-    let signing_secret = prompter.prompt_secret("SLACK_SIGNING_SECRET")?;
-    let app_token = prompter.prompt_secret("SLACK_APP_TOKEN")?;
-    let allowed_user_id = prompter.prompt("SLACK_ALLOWED_USER_ID")?;
-    let channel_id = prompter.prompt("channelId")?;
-    let project_root = prompter.prompt("projectRoot")?;
-    let project_label = prompter.prompt("projectLabel")?;
-
-    validate_project_root(&project_root)?;
-    let env_path = workspace_root.join(".env.local");
-    write_env_updates(
-        &env_path,
-        &[
-            ("SLACK_BOT_TOKEN", &bot_token),
-            ("SLACK_SIGNING_SECRET", &signing_secret),
-            ("SLACK_APP_TOKEN", &app_token),
-            ("SLACK_ALLOWED_USER_ID", &allowed_user_id),
-        ],
-    )?;
-    let _ = from_path_override(&env_path);
-
-    let store = JsonChannelProjectStore::new(config.channel_project_store_path.clone());
-    let mut records = store.load()?;
-    upsert_channel_project_record(
-        &mut records,
-        ChannelProjectRecord {
-            channel_id,
-            project_root,
-            project_label,
-        },
-    );
-    write_channel_project_records(&config.channel_project_store_path, &records)?;
-
-    let checks = run_doctor(config, workspace_root);
-    print_doctor_summary(prompter, &checks);
-    if checks.iter().all(|check| check.ok) {
-        prompter.println("Setup complete. You can now run: cargo run -p rcc");
-        Ok(())
-    } else {
-        bail!(format_setup_doctor_failures(&checks))
-    }
+    let resolved = resolve_setup_input(SetupInput::default(), false, prompter).await?;
+    execute_setup(config, workspace_root, resolved, prompter).await
 }
 
-pub async fn run_setup(config: &AppConfig) -> Result<()> {
+pub async fn run_setup(config: &AppConfig, args: &[String]) -> Result<()> {
     let workspace_root = std::env::current_dir().context("read current directory")?;
+    let prerequisites = collect_setup_prerequisites(config, &workspace_root);
+    if prerequisites.has_hard_failure() {
+        bail!(format_hard_failure(&prerequisites, &workspace_root));
+    }
+
+    let options = parse_setup_cli_options(args);
     let mut prompter = StdioPrompter;
-    run_setup_with_prompter(config, &workspace_root, &mut prompter).await
+
+    if !options.non_interactive {
+        prompter.println("Remote Claude Code Slack-first setup을 시작합니다.");
+        prompter.println("Slack app은 Create app from manifest로 생성합니다.");
+        prompter.println("Manifest path: slack/app-manifest.json");
+        prompter.println("Slack link: https://api.slack.com/apps?new_app=1");
+        prompter.confirm("Slack app 생성이 끝났으면 Enter를 누르세요.")?;
+    }
+
+    let mut input = SetupInput::default();
+    if let Some(path) = options.from_file.as_ref() {
+        input = load_setup_input_from_file(path)?;
+    }
+    input = apply_setup_env_overrides(input);
+    let resolved = resolve_setup_input(input, options.non_interactive, &mut prompter).await?;
+    execute_setup(config, &workspace_root, resolved, &mut prompter).await
 }

@@ -10,6 +10,14 @@ Slack-first 공개 전에 실제로 첫 성공 경험이 되는지 확인하는 
 4. `tmux`와 `claude`가 `PATH`에서 실행 가능합니다.
 5. public channel이면 manifest 변경 후 Slack app을 다시 설치했고, private channel이면 bot을 미리 초대했습니다.
 
+## Deterministic setup
+
+```bash
+cargo run -p rcc -- setup --from-file docs/setup.example.json
+```
+
+If secrets should not live in the file, inject them with `RCC_SETUP_*` environment variables.
+
 ## Doctor
 
 먼저 아래 명령이 모두 `[OK]`를 출력해야 합니다.
