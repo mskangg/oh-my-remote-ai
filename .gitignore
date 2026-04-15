@@ -3,3 +3,12 @@
 /.env.local
 /data/channel-projects.json
 .DS_Store
+.vscode/
+.idea/
+*.log
+*.tmp
+*.bak
+*.swp
+.cache/
+.playwright-test/
+CLAUDE.md
