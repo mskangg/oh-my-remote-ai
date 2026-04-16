@@ -37,9 +37,58 @@
 
 ## Quickstart
 
-### 가장 빠른 경로: API-first setup
+### 1. 플러그인 설치
 
-Slack app configuration token이 이미 있다면, `setup`은 먼저 `apps.manifest.create`를 시도할 수 있습니다.
+마켓플레이스 추가:
+
+```bash
+/plugin marketplace add mskangg/remote-claude-code
+```
+
+플러그인 설치:
+
+```bash
+/plugin install remote-claude-code-setup@remote-claude-code
+```
+
+### 2. Claude Code에서 셋업 시작
+
+아래처럼 말하면 됩니다.
+
+```text
+remote-claude-code 셋업해줘
+```
+
+또는:
+
+```text
+슬랙 연동 설치해줘
+```
+
+### 3. 설치 마법사 진행
+
+setup wizard는 다음 순서로 진행됩니다.
+- 로컬 환경 확인
+- app configuration token 확인
+- 가능하면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
+- 실패하거나 token이 없으면 검증된 semi-automatic Slack 콘솔 경로로 fallback
+- 필요한 값을 한 단계씩 수집
+- artifact 기반 resume
+- `doctor`
+- release binary 준비
+
+### 4. 실행 파일 준비 및 실행
+
+```bash
+cargo build --release -p rcc
+./target/release/rcc
+```
+
+### Direct CLI path
+
+플러그인 없이 직접 진행하려면 아래 경로를 사용할 수 있습니다.
+
+#### API-first setup
 
 ```bash
 cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
@@ -48,13 +97,10 @@ cargo build --release -p rcc
 ./target/release/rcc
 ```
 
-### 검증된 경로: guided semi-automatic setup
-
-config token이 없으면, `setup`은 검증된 guided fallback 경로로 내려갑니다.
+#### Guided fallback setup
 
 ```bash
 cargo run -p rcc -- setup
-# setup이 안내하는 Slack 콘솔 단계를 따라갑니다
 cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch.example.json --json
 cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
 cargo run -p rcc -- doctor
@@ -62,7 +108,7 @@ cargo build --release -p rcc
 ./target/release/rcc
 ```
 
-`setup`은 이제 automation-first 설치 마법사입니다. 먼저 기존 값을 재사용하고, app configuration token이 있으면 Slack app creation을 manifest API로 시도합니다. API 생성이 불가능하거나 실패하면, 검증된 semi-automatic Slack 콘솔 경로로 자연스럽게 fallback한 뒤 artifact 기반 resume, `doctor`, release build까지 이어집니다.
+`setup`은 automation-first 설치 마법사입니다. 먼저 기존 값을 재사용하고, app configuration token이 있으면 Slack app creation을 manifest API로 시도합니다. API 생성이 불가능하거나 실패하면, 검증된 semi-automatic Slack 콘솔 경로로 자연스럽게 fallback한 뒤 artifact 기반 resume, `doctor`, release build까지 이어집니다.
 
 앱 실행 뒤 Slack에서 `/cc`를 실행하면 됩니다.
 
