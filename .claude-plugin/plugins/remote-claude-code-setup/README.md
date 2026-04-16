@@ -31,4 +31,4 @@ Guided setup wizard plugin for Remote Claude Code.
 
 - `remote-claude-code-setup-wizard`
 
-This plugin ships the setup wizard skill inside the plugin package so installation does not depend on the repository root `.claude/skills` path.
+This plugin ships the setup wizard skill inside the plugin package under `./skills/`, so installation does not depend on the repository root `.claude/skills` path.

@@ -2,9 +2,5 @@
   "name": "remote-claude-code-setup",
   "version": "0.1.0",
   "description": "Guided setup wizard for Remote Claude Code with API-first Slack app creation through apps.manifest.create when a config token is available, verified semi-automatic fallback token collection, artifact resume, doctor verification, and release binary guidance.",
-  "skills": [
-    {
-      "path": ".claude/skills/remote-claude-code-setup-wizard"
-    }
-  ]
+  "skills": "./skills/"
 }
