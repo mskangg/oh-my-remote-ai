@@ -2,6 +2,11 @@
 /.local/
 /.env.local
 /data/channel-projects.json
+/.claude/settings.local.json
+/.claude/plans/
+/.claude/agents/
+/.claude/skills/remote-claude-harness/
+/docs/superpowers/
 .DS_Store
 .vscode/
 .idea/

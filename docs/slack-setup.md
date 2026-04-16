@@ -9,17 +9,21 @@ Remote Claude Code의 첫 공개는 Slack-first입니다. 지금은 사용자가
 ## 가장 짧은 흐름
 
 ```bash
-cargo run -p rcc -- setup
+cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
 ```
 
-`setup`이 아래를 순서대로 진행합니다.
+`setup`은 automation-first entrypoint입니다.
 
-- Slack app 생성 링크 안내 (`Create app from manifest`)
-- `slack/app-manifest.json` 경로 안내
-- 토큰 4종 입력
-- channel mapping 입력
+기본 흐름:
+- 기존 값 / file / env override 먼저 확인
+- app configuration token이 있으면 `apps.manifest.create`를 먼저 시도
+- 성공하면 설치 승인/토큰 회수 단계만 남김
+- 실패하거나 token이 없으면 검증된 manual-assisted Slack 단계로 fallback
+- 생성 결과를 setup 입력/artefact로 흡수
 - `.env.local` 작성
+- channel mapping 작성
 - `doctor` 실행
+- release binary 실행 경로 안내
 
 그 다음 실행 흐름은 아래처럼 고정됩니다.
 
@@ -30,8 +34,39 @@ cargo run -p rcc
 
 ## Automation-friendly setup
 
+### API-first path
+
 ```bash
-cargo run -p rcc -- setup --from-file docs/setup.example.json
+cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
+```
+
+Slack app configuration token이 있으면 setup은 `apps.manifest.create`를 먼저 시도합니다.
+성공하면 artifact에 `signingSecret`, `appId`, `oauthAuthorizeUrl`를 반영하고, 이후에는 설치 승인과 토큰 회수 단계만 진행하면 됩니다.
+
+### Fallback semi-automatic path
+
+Slack artifact 기본 경로:
+
+- `.local/slack-setup-artifact.json`
+
+manual-assisted Slack 단계에 들어가면 `setup`이 이 파일을 자동 생성합니다.
+이미 알고 있는 값(file/env/기존 상태)은 자동 prefill되고, Slack 단계에서 새로 얻은 값만 채우면 됩니다.
+
+Slack artifact patch 예시:
+
+- `docs/slack-setup-artifact-patch.example.json`
+
+브라우저 보조나 수동 단계가 새로 알아낸 값만 부분적으로 반영할 때는 아래처럼 patch를 merge합니다.
+이 command는 patch를 merge한 직후 artifact가 재개 가능한 상태인지도 함께 출력합니다.
+
+```bash
+cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch.example.json
+```
+
+Slack artifact를 다시 흡수하는 경로:
+
+```bash
+cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
 ```
 
 Optional env overrides:
@@ -43,12 +78,18 @@ Optional env overrides:
 - `RCC_SETUP_PROJECT_ROOT`
 - `RCC_SETUP_PROJECT_LABEL`
 
+non-interactive 규칙:
+- 가능한 값은 file/env/기존 상태에서 채웁니다.
+- 값이 부족하면 hang하지 않고 즉시 실패합니다.
+- Slack 콘솔 개입이 필요한 단계는 manual-assisted 단계로 분리합니다.
+- Slack 단계가 끝나면 artifact JSON을 다시 넣어 setup을 재개할 수 있습니다.
+
 ## Claude Code에게 맡길 때
 
-이 프로젝트의 사용자는 Claude Code에 익숙하다는 전제를 둡니다. 완전한 딸깍 설치가 아니더라도, 아래처럼 Claude Code에게 setup을 맡길 수 있어야 합니다.
+이 프로젝트의 사용자는 Claude Code에 익숙하다는 전제를 둡니다. 완전한 무인 설치가 아니더라도, Claude가 아래 순서로 setup을 주도해야 합니다.
 
 ```text
-이 저장소의 Slack 설정을 진행해줘. `slack/app-manifest.json` 경로를 써서 앱 생성 단계를 안내하고, 필요하면 `docs/setup.example.json`이나 `RCC_SETUP_*`로 값을 채우고, 마지막에 `cargo run -p rcc -- doctor`까지 실행해줘.
+이 저장소의 Slack 설정을 진행해줘. 먼저 `rcc setup`을 실행해서 `.local/slack-setup-artifact.json`이 생성되도록 하고, Slack app 생성이 필요하면 `slack/app-manifest.json` 기준으로 manual-assisted 단계만 진행해줘. Slack 단계에서 새로 얻은 값은 `docs/slack-setup-artifact-patch.example.json` 형태의 patch JSON으로 정리해서 `cargo run -p rcc -- setup --merge-slack-artifact <patch.json>`로 반영해줘. 마지막에는 `cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive`와 `cargo run -p rcc -- doctor`까지 실행해줘.
 ```
 
 ## 필요한 값

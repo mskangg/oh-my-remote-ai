@@ -4,7 +4,7 @@ use application::{SlackApplicationService, SlackSessionLifecycleObserver};
 use anyhow::Context;
 use async_trait::async_trait;
 use core_model::SessionState;
-use core_service::{SessionRegistry, SessionRepository};
+use core_service::{RuntimeEngine, SessionRegistry, SessionRepository};
 use runtime_local::{LocalRuntime, LocalRuntimeConfig, SystemTmuxClient};
 use serde::{Deserialize, Serialize};
 use session_store::SqliteSessionRepository;
@@ -154,6 +154,21 @@ pub fn build_app(config: AppConfig) -> anyhow::Result<AppContext> {
     })
 }
 
+async fn mark_recovery_failure(
+    repository: &SqliteSessionRepository,
+    session_id: core_model::SessionId,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    repository
+        .save_state(
+            session_id,
+            &SessionState::Failed {
+                reason: format!("recover failed: {error}"),
+            },
+        )
+        .await
+}
+
 impl AppContext {
     pub async fn recover_active_sessions(&self) -> anyhow::Result<()> {
         for session_id in self.repository.list_session_ids()? {
@@ -164,10 +179,19 @@ impl AppContext {
             match state {
                 SessionState::Running { active_turn }
                 | SessionState::Cancelling { active_turn } => {
-                    self.session_registry
+                    if let Err(error) = self
+                        .session_registry
                         .runtime()
-                        .recover_active_turn(session_id, active_turn)
-                        .await;
+                        .handle(session_id, &core_model::SessionMsg::Recover, &SessionState::Idle)
+                        .await
+                    {
+                        mark_recovery_failure(&self.repository, session_id, &error).await?;
+                    } else {
+                        self.session_registry
+                            .runtime()
+                            .recover_active_turn(session_id, active_turn)
+                            .await;
+                    }
                 }
                 _ => {}
             }
@@ -238,10 +262,6 @@ impl AppContext {
 }
 
 pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck> {
-    let slack_bot_token = env::var("SLACK_BOT_TOKEN").ok();
-    let slack_app_token = env::var("SLACK_APP_TOKEN").ok();
-    let slack_signing_secret = env::var("SLACK_SIGNING_SECRET").ok();
-    let slack_allowed_user_id = env::var("SLACK_ALLOWED_USER_ID").ok();
     let tmux_ok = std::process::Command::new("tmux")
         .arg("-V")
         .output()
@@ -249,30 +269,39 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
         .unwrap_or(false);
     let manifest_path = workspace_root.join("slack").join("app-manifest.json");
     let env_file_path = find_env_file(workspace_root);
+    let env_values = env_file_path
+        .as_ref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map(|raw| {
+            raw.lines()
+                .filter_map(|line| line.split_once('=').map(|(key, value)| (key.to_string(), value.to_string())))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let slack_bot_token = env_values.get("SLACK_BOT_TOKEN");
+    let slack_app_token = env_values.get("SLACK_APP_TOKEN");
+    let slack_signing_secret = env_values.get("SLACK_SIGNING_SECRET");
+    let slack_allowed_user_id = env_values.get("SLACK_ALLOWED_USER_ID");
 
     vec![
         DoctorCheck {
             name: "slack_bot_token",
-            ok: slack_bot_token.as_deref().is_some_and(|value| !value.trim().is_empty()),
+            ok: slack_bot_token.is_some_and(|value| !value.trim().is_empty()),
             detail: "SLACK_BOT_TOKEN is configured".to_string(),
         },
         DoctorCheck {
             name: "slack_app_token",
-            ok: slack_app_token.as_deref().is_some_and(|value| !value.trim().is_empty()),
+            ok: slack_app_token.is_some_and(|value| !value.trim().is_empty()),
             detail: "SLACK_APP_TOKEN is configured".to_string(),
         },
         DoctorCheck {
             name: "slack_signing_secret",
-            ok: slack_signing_secret
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
+            ok: slack_signing_secret.is_some_and(|value| !value.trim().is_empty()),
             detail: "SLACK_SIGNING_SECRET is configured".to_string(),
         },
         DoctorCheck {
             name: "slack_allowed_user_id",
-            ok: slack_allowed_user_id
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty()),
+            ok: slack_allowed_user_id.is_some_and(|value| !value.trim().is_empty()),
             detail: "SLACK_ALLOWED_USER_ID is configured".to_string(),
         },
         DoctorCheck {
@@ -341,15 +370,101 @@ pub fn parse_cli_command(args: &[String]) -> CliCommand {
 mod tests {
     use core_model::{SessionState, TurnId};
     use core_service::SessionRepository;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
     use transport_slack::{SlackSessionStart, SlackSocketModeConfig};
 
     use super::*;
 
+    fn slack_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock slack env")
+    }
+
+    fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock cwd")
+    }
+
     #[test]
     fn parse_cli_command_detects_setup() {
         let args = vec!["rcc".to_string(), "setup".to_string()];
         assert_eq!(parse_cli_command(&args), CliCommand::Setup);
+    }
+
+    #[test]
+    fn parse_setup_cli_options_reads_write_slack_artifact_template() {
+        let args = vec![
+            "rcc".to_string(),
+            "setup".to_string(),
+            "--write-slack-artifact-template".to_string(),
+            "./tmp/slack-artifact.json".to_string(),
+            "--slack-config-token".to_string(),
+            "xoxa-config-token".to_string(),
+        ];
+
+        let options = setup::parse_setup_cli_options(&args);
+        assert_eq!(
+            options.write_slack_artifact_template,
+            Some(std::path::PathBuf::from("./tmp/slack-artifact.json"))
+        );
+        assert_eq!(
+            options.slack_app_configuration_token.as_deref(),
+            Some("xoxa-config-token")
+        );
+        assert!(options.non_interactive);
+    }
+
+    #[test]
+    fn parse_setup_cli_options_reads_merge_slack_artifact() {
+        let args = vec![
+            "rcc".to_string(),
+            "setup".to_string(),
+            "--merge-slack-artifact".to_string(),
+            "./tmp/slack-artifact-patch.json".to_string(),
+            "--json".to_string(),
+        ];
+
+        let options = setup::parse_setup_cli_options(&args);
+        assert_eq!(
+            options.merge_slack_artifact,
+            Some(std::path::PathBuf::from("./tmp/slack-artifact-patch.json"))
+        );
+        assert!(options.non_interactive);
+        assert!(options.json);
+    }
+
+    #[test]
+    fn write_slack_setup_artifact_template_creates_json_file() {
+        let temp_dir = tempdir().expect("tempdir");
+        let path = temp_dir.path().join("slack-artifact.json");
+
+        setup::write_slack_setup_artifact_template(&path, &setup::SetupInput::default())
+            .expect("write artifact template");
+
+        let written = fs::read_to_string(&path).expect("read artifact template");
+        assert!(written.contains("botToken"));
+        assert!(written.contains("projectRoot"));
+    }
+
+    #[test]
+    fn write_slack_setup_artifact_template_prefills_known_values() {
+        let temp_dir = tempdir().expect("tempdir");
+        let path = temp_dir.path().join("slack-artifact.json");
+        let input = setup::SetupInput {
+            channel_id: Some("C123".into()),
+            project_root: Some("/tmp/project".into()),
+            project_label: Some("demo-project".into()),
+            ..Default::default()
+        };
+
+        setup::write_slack_setup_artifact_template(&path, &input)
+            .expect("write artifact template with prefill");
+
+        let written = fs::read_to_string(&path).expect("read artifact template");
+        assert!(written.contains("C123"));
+        assert!(written.contains("/tmp/project"));
+        assert!(written.contains("demo-project"));
     }
 
     #[test]
@@ -441,45 +556,175 @@ mod tests {
         assert!(output.contains("channel-projects.json"));
     }
 
+    #[test]
+    fn setup_result_reports_manual_required_without_marking_failure() {
+        let result = setup::SetupOutcome::ManualRequired {
+            summary: "Slack app approval is still required".to_string(),
+            next_actions: vec!["Open Slack app install page".to_string()],
+        };
+
+        assert!(result.is_manual_required());
+        assert!(!result.is_failed());
+    }
+
+    #[test]
+    fn setup_result_reports_blocked_as_terminal_error() {
+        let result = setup::SetupOutcome::Blocked {
+            reason: "tmux is not available on PATH".to_string(),
+        };
+
+        assert!(result.is_blocked());
+        assert!(result.is_failed());
+    }
+
+    #[test]
+    fn slack_artifact_missing_fields_reports_resume_readiness() {
+        let artifact = setup::SlackSetupArtifact {
+            slack: setup::SlackArtifactValues {
+                bot_token: Some("xoxb-ready".into()),
+                signing_secret: None,
+                app_token: Some("xapp-ready".into()),
+                allowed_user_id: None,
+                app_configuration_token: None,
+                app_id: None,
+                oauth_authorize_url: None,
+            },
+            channel: setup::SlackArtifactChannel {
+                id: Some("C123".into()),
+                project_root: Some("/tmp/project".into()),
+                project_label: None,
+            },
+        };
+
+        let missing = setup::slack_artifact_missing_fields(&artifact);
+        assert_eq!(
+            missing,
+            vec!["slack_signing_secret", "slack_allowed_user_id", "project_label"]
+        );
+
+        let formatted = setup::format_slack_artifact_resume_status(&artifact);
+        assert!(formatted.contains("Artifact is not ready to resume setup yet"));
+        assert!(formatted.contains("slack_signing_secret"));
+    }
+
+    #[test]
+    fn slack_artifact_resume_status_reports_ready_when_complete() {
+        let artifact = setup::SlackSetupArtifact {
+            slack: setup::SlackArtifactValues {
+                bot_token: Some("xoxb-ready".into()),
+                signing_secret: Some("signing-ready".into()),
+                app_token: Some("xapp-ready".into()),
+                allowed_user_id: Some("U123".into()),
+                app_configuration_token: None,
+                app_id: None,
+                oauth_authorize_url: None,
+            },
+            channel: setup::SlackArtifactChannel {
+                id: Some("C123".into()),
+                project_root: Some("/tmp/project".into()),
+                project_label: Some("demo-project".into()),
+            },
+        };
+
+        let missing = setup::slack_artifact_missing_fields(&artifact);
+        assert!(missing.is_empty());
+
+        let formatted = setup::format_slack_artifact_resume_status(&artifact);
+        assert!(formatted.contains("Artifact is ready to resume setup"));
+    }
+
+    #[test]
+    fn apply_manifest_create_response_updates_artifact_with_creation_fields() {
+        let artifact = setup::SlackSetupArtifact::default();
+        let response = setup::SlackManifestCreateResponse {
+            app_id: "A123".into(),
+            oauth_authorize_url: "https://slack.com/oauth/v2/authorize?client_id=123".into(),
+            credentials: setup::SlackManifestCreateCredentials {
+                client_id: "111.222".into(),
+                client_secret: "secret".into(),
+                verification_token: "verification".into(),
+                signing_secret: "signing-secret".into(),
+            },
+        };
+
+        let updated = setup::apply_manifest_create_response(artifact, &response);
+        assert_eq!(updated.slack.app_id.as_deref(), Some("A123"));
+        assert_eq!(updated.slack.oauth_authorize_url.as_deref(), Some("https://slack.com/oauth/v2/authorize?client_id=123"));
+        assert_eq!(updated.slack.signing_secret.as_deref(), Some("signing-secret"));
+    }
+
+    #[test]
+    fn hard_failure_formats_blocked_setup_outcome() {
+        let prerequisites = setup::SetupPrerequisites {
+            tmux_ok: false,
+            claude_ok: true,
+            manifest_ok: true,
+            workspace_writable: true,
+            env_exists: false,
+            mapping_exists: false,
+        };
+
+        let outcome =
+            setup::blocked_outcome_from_prerequisites(&prerequisites, std::path::Path::new("/tmp/workspace"));
+
+        assert!(matches!(outcome, setup::SetupOutcome::Blocked { .. }));
+        assert!(setup::format_setup_outcome(&outcome).contains("tmux is not available on PATH"));
+    }
+
     #[tokio::test]
-    async fn setup_flow_guides_slack_bot_onboarding_and_writes_local_files() {
-        let temp_dir = tempdir().expect("create temp dir");
+    async fn interactive_setup_surfaces_manual_required_slack_step_before_prompting() {
+        let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
-        fs::write(workspace_root.join("slack/app-manifest.json"), "{}")
-            .expect("write manifest");
-        fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
 
         let config = AppConfig {
             state_db_path: workspace_root.join(".local/state.db"),
             channel_project_store_path: workspace_root.join("data/channel-projects.json"),
             runtime_working_directory: workspace_root.display().to_string(),
-            runtime_launch_command: "claude --settings .claude/claude-stop-hooks.json --dangerously-skip-permissions".to_string(),
+            runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
         };
 
-        let mut prompter = setup::FakePrompter::new(vec![
-            setup::FakeAnswer::Confirm,
-            setup::FakeAnswer::Secret("xoxb-bot".into()),
-            setup::FakeAnswer::Secret("signing-secret".into()),
-            setup::FakeAnswer::Secret("xapp-app".into()),
-            setup::FakeAnswer::Prompt("U123".into()),
-            setup::FakeAnswer::Prompt("C123".into()),
-            setup::FakeAnswer::Prompt(workspace_root.display().to_string()),
-            setup::FakeAnswer::Prompt("demo-project".into()),
-        ]);
+        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Confirm]);
+        let error = setup::run_setup_with_prompter(
+            &config,
+            workspace_root,
+            setup::SetupInput {
+                channel_id: Some("C123".into()),
+                project_root: Some(workspace_root.display().to_string()),
+                project_label: Some("demo-project".into()),
+                ..Default::default()
+            },
+            &mut prompter,
+        )
+        .await
+        .expect_err("missing values should stop after manual-required guidance");
 
-        let result = setup::run_setup_with_prompter(&config, workspace_root, &mut prompter).await;
-        assert!(result.is_ok(), "{result:?}");
-        assert!(prompter.output().contains("Create app from manifest"));
-        assert!(prompter.output().contains("cargo run -p rcc"));
-        assert!(fs::read_to_string(workspace_root.join(".env.local"))
-            .unwrap()
-            .contains("SLACK_BOT_TOKEN=xoxb-bot"));
-        assert!(fs::read_to_string(workspace_root.join("data/channel-projects.json"))
-            .unwrap()
-            .contains("demo-project"));
+        assert!(error.to_string().contains("Slack app approval is still required"));
+        assert!(error.to_string().contains("channelId already prepared: C123"));
+        assert!(error
+            .to_string()
+            .contains(".local/slack-setup-artifact.json"));
+        assert!(error.to_string().contains("--from-slack-artifact"));
+        assert!(prompter.output().contains("manual-assisted"));
+        assert!(workspace_root.join(".local/slack-setup-artifact.json").exists());
+        assert!(error
+            .to_string()
+            .contains(".local/slack-setup-artifact.json"));
+        assert!(!prompter.output().contains("SECRET:SLACK_BOT_TOKEN"));
+    }
+
+    #[test]
+    fn pending_slack_artifact_path_uses_workspace_local_file() {
+        let workspace_root = std::path::Path::new("/tmp/demo-workspace");
+        let path = setup::pending_slack_artifact_path(workspace_root);
+
+        assert_eq!(
+            path,
+            workspace_root.join(".local").join("slack-setup-artifact.json")
+        );
     }
 
     #[tokio::test]
@@ -489,6 +734,7 @@ mod tests {
             slack_signing_secret: None,
             slack_app_token: None,
             slack_allowed_user_id: Some("U123".into()),
+            slack_app_configuration_token: None,
             channel_id: None,
             project_root: Some("/tmp/project".into()),
             project_label: None,
@@ -522,6 +768,7 @@ mod tests {
   "slack_signing_secret": "signing-json",
   "slack_app_token": "xapp-json",
   "slack_allowed_user_id": "UJSON",
+  "slack_app_configuration_token": "xoxa-json",
   "channel_id": "CJSON",
   "project_root": "/tmp/project",
   "project_label": "json-project"
@@ -532,12 +779,268 @@ mod tests {
         let loaded = setup::load_setup_input_from_file(&path).expect("load setup input");
         assert_eq!(loaded.channel_id.as_deref(), Some("CJSON"));
         assert_eq!(loaded.project_label.as_deref(), Some("json-project"));
+        assert_eq!(loaded.slack_app_configuration_token.as_deref(), Some("xoxa-json"));
+    }
+
+    #[test]
+    fn load_slack_setup_artifact_from_json_file() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("slack-artifact.json");
+        fs::write(
+            &path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-artifact",
+    "signingSecret": "signing-artifact",
+    "appToken": "xapp-artifact",
+    "allowedUserId": "UARTIFACT",
+    "appConfigurationToken": "xoxa-artifact",
+    "appId": "A123",
+    "oauthAuthorizeUrl": "https://slack.com/oauth/v2/authorize?..."
+  },
+  "channel": {
+    "id": "CARTIFACT",
+    "projectRoot": "/tmp/project",
+    "projectLabel": "artifact-project"
+  }
+}"#,
+        )
+        .expect("write artifact file");
+
+        let loaded = setup::load_slack_setup_artifact_from_file(&path).expect("load slack setup artifact");
+        let merged = setup::apply_slack_setup_artifact(setup::SetupInput::default(), loaded.clone());
+
+        assert_eq!(merged.slack_bot_token.as_deref(), Some("xoxb-artifact"));
+        assert_eq!(merged.slack_app_configuration_token.as_deref(), Some("xoxa-artifact"));
+        assert_eq!(loaded.slack.app_id.as_deref(), Some("A123"));
+        assert_eq!(loaded.slack.oauth_authorize_url.as_deref(), Some("https://slack.com/oauth/v2/authorize?..."));
+        assert_eq!(merged.channel_id.as_deref(), Some("CARTIFACT"));
+        assert_eq!(merged.project_label.as_deref(), Some("artifact-project"));
+    }
+
+    #[test]
+    fn load_slack_setup_patch_from_json_file_with_partial_fields() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("slack-artifact-patch.json");
+        fs::write(
+            &path,
+            r#"{
+  "slack": {
+    "appToken": "xapp-patch"
+  },
+  "channel": {
+    "projectLabel": "patched-project"
+  }
+}"#,
+        )
+        .expect("write patch file");
+
+        let loaded = setup::load_slack_setup_artifact_from_file(&path).expect("load slack patch artifact");
+
+        assert_eq!(loaded.slack.app_token.as_deref(), Some("xapp-patch"));
+        assert_eq!(loaded.slack.bot_token, None);
+        assert_eq!(loaded.channel.project_label.as_deref(), Some("patched-project"));
+        assert_eq!(loaded.channel.id, None);
+    }
+
+    #[test]
+    fn merge_slack_setup_artifact_file_updates_only_provided_values() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("slack-artifact.json");
+        fs::write(
+            &path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-existing",
+    "signingSecret": "signing-existing",
+    "appToken": "xapp-existing",
+    "allowedUserId": "UEXISTING"
+  },
+  "channel": {
+    "id": "CEXISTING",
+    "projectRoot": "/tmp/existing",
+    "projectLabel": "existing-project"
+  }
+}"#,
+        )
+        .expect("write artifact file");
+
+        setup::merge_slack_setup_artifact_file(
+            &path,
+            setup::SlackSetupArtifact {
+                slack: setup::SlackArtifactValues {
+                    bot_token: None,
+                    signing_secret: None,
+                    app_token: Some("xapp-updated".into()),
+                    allowed_user_id: None,
+                    app_configuration_token: None,
+                    app_id: None,
+                    oauth_authorize_url: None,
+                },
+                channel: setup::SlackArtifactChannel {
+                    id: None,
+                    project_root: None,
+                    project_label: Some("updated-project".into()),
+                },
+            },
+        )
+        .expect("merge artifact file");
+
+        let merged = setup::load_slack_setup_artifact_from_file(&path).expect("reload artifact file");
+        assert_eq!(merged.slack.bot_token.as_deref(), Some("xoxb-existing"));
+        assert_eq!(merged.slack.app_token.as_deref(), Some("xapp-updated"));
+        assert_eq!(merged.channel.project_label.as_deref(), Some("updated-project"));
+        assert_eq!(merged.channel.project_root.as_deref(), Some("/tmp/existing"));
+    }
+
+    #[test]
+    fn merge_pending_slack_artifact_uses_workspace_default_path() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        let pending_path = workspace_root.join(".local").join("slack-setup-artifact.json");
+        fs::create_dir_all(pending_path.parent().expect("parent")).expect("create .local");
+        fs::write(
+            &pending_path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-existing",
+    "signingSecret": "signing-existing",
+    "appToken": "xapp-existing",
+    "allowedUserId": "UEXISTING"
+  },
+  "channel": {
+    "id": "CEXISTING",
+    "projectRoot": "/tmp/existing",
+    "projectLabel": "existing-project"
+  }
+}"#,
+        )
+        .expect("seed pending artifact");
+
+        let patch_path = workspace_root.join("patch.json");
+        fs::write(
+            &patch_path,
+            r#"{
+  "slack": {
+    "appToken": "xapp-browser"
+  },
+  "channel": {
+    "projectLabel": "browser-project"
+  }
+}"#,
+        )
+        .expect("write patch artifact");
+
+        setup::merge_pending_slack_artifact(workspace_root, &patch_path)
+            .expect("merge pending artifact");
+
+        let merged = setup::load_slack_setup_artifact_from_file(&pending_path).expect("reload pending artifact");
+        assert_eq!(merged.slack.bot_token.as_deref(), Some("xoxb-existing"));
+        assert_eq!(merged.slack.app_token.as_deref(), Some("xapp-browser"));
+        assert_eq!(merged.channel.project_label.as_deref(), Some("browser-project"));
+    }
+
+    #[test]
+    fn merge_pending_slack_artifact_reports_resume_status() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        let pending_path = workspace_root.join(".local").join("slack-setup-artifact.json");
+        fs::create_dir_all(pending_path.parent().expect("parent")).expect("create .local");
+        fs::write(
+            &pending_path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-existing",
+    "signingSecret": "signing-existing",
+    "appToken": null,
+    "allowedUserId": "UEXISTING"
+  },
+  "channel": {
+    "id": "CEXISTING",
+    "projectRoot": "/tmp/existing",
+    "projectLabel": "existing-project"
+  }
+}"#,
+        )
+        .expect("seed pending artifact");
+
+        let patch_path = workspace_root.join("patch.json");
+        fs::write(
+            &patch_path,
+            r#"{
+  "slack": {
+    "appToken": "xapp-browser"
+  }
+}"#,
+        )
+        .expect("write patch artifact");
+
+        let status = setup::merge_pending_slack_artifact(workspace_root, &patch_path)
+            .expect("merge pending artifact with status");
+
+        assert!(status.contains("Artifact is ready to resume setup"));
+    }
+
+    #[test]
+    fn merge_pending_slack_artifact_reports_resume_status_as_json() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        let pending_path = workspace_root.join(".local").join("slack-setup-artifact.json");
+        fs::create_dir_all(pending_path.parent().expect("parent")).expect("create .local");
+        fs::write(
+            &pending_path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-existing",
+    "signingSecret": null,
+    "appToken": null,
+    "allowedUserId": "UEXISTING"
+  },
+  "channel": {
+    "id": "CEXISTING",
+    "projectRoot": "/tmp/existing",
+    "projectLabel": "existing-project"
+  }
+}"#,
+        )
+        .expect("seed pending artifact");
+
+        let patch_path = workspace_root.join("patch.json");
+        fs::write(
+            &patch_path,
+            r#"{
+  "slack": {
+    "appToken": "xapp-browser"
+  }
+}"#,
+        )
+        .expect("write patch artifact");
+
+        let report = setup::merge_pending_slack_artifact_report(workspace_root, &patch_path)
+            .expect("merge pending artifact report");
+
+        assert!(report.contains("\"ready\":false"));
+        assert!(report.contains("slack_signing_secret"));
+    }
+
+    #[test]
+    fn format_merge_pending_slack_artifact_output_uses_json_when_requested() {
+        let report = "{\"ready\":true}";
+        let output = setup::format_bridge_output(report, true);
+        assert_eq!(output, report);
+
+        let text_output = setup::format_bridge_output(report, false);
+        assert_eq!(text_output, report);
     }
 
     #[test]
     fn env_overrides_json_values_for_setup_input() {
-        let previous = env::var_os("RCC_SETUP_CHANNEL_ID");
-        unsafe { env::set_var("RCC_SETUP_CHANNEL_ID", "CENV") };
+        let previous_channel = env::var_os("RCC_SETUP_CHANNEL_ID");
+        let previous_config = env::var_os("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN");
+        unsafe {
+            env::set_var("RCC_SETUP_CHANNEL_ID", "CENV");
+            env::set_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN", "xoxa-env");
+        };
 
         let input = setup::apply_setup_env_overrides(setup::SetupInput {
             channel_id: Some("CJSON".into()),
@@ -545,11 +1048,38 @@ mod tests {
         });
 
         assert_eq!(input.channel_id.as_deref(), Some("CENV"));
+        assert_eq!(input.slack_app_configuration_token.as_deref(), Some("xoxa-env"));
 
-        match previous {
+        match previous_channel {
             Some(value) => unsafe { env::set_var("RCC_SETUP_CHANNEL_ID", value) },
             None => unsafe { env::remove_var("RCC_SETUP_CHANNEL_ID") },
         }
+        match previous_config {
+            Some(value) => unsafe { env::set_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN", value) },
+            None => unsafe { env::remove_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN") },
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_values_are_not_overwritten_by_prompt_resolution() {
+        let mut prompter = setup::FakePrompter::new(vec![]);
+        let input = setup::SetupInput {
+            slack_bot_token: Some("xoxb-existing".to_string()),
+            slack_signing_secret: Some("secret-existing".to_string()),
+            slack_app_token: Some("xapp-existing".to_string()),
+            slack_allowed_user_id: Some("U123".to_string()),
+            slack_app_configuration_token: None,
+            channel_id: Some("C123".to_string()),
+            project_root: Some("/tmp/project".to_string()),
+            project_label: Some("demo".to_string()),
+        };
+
+        let resolved = setup::resolve_setup_input(input.clone(), false, &mut prompter)
+            .await
+            .expect("resolve without prompts");
+
+        assert_eq!(resolved, input);
+        assert_eq!(prompter.output(), "");
     }
 
     #[tokio::test]
@@ -566,12 +1096,204 @@ mod tests {
         .await;
 
         let error = format!("{result:?}");
-        assert!(error.contains("missing required field"));
+        assert!(error.contains("automation-first setup"));
         assert!(error.contains("slack_signing_secret"));
     }
 
     #[tokio::test]
+    async fn run_setup_returns_automation_first_error_for_missing_non_interactive_values() {
+        let _guard = cwd_lock();
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let original_dir = env::current_dir().expect("cwd");
+        env::set_current_dir(workspace_root).expect("chdir");
+        let result = setup::run_setup(
+            &config,
+            &["rcc".to_string(), "setup".to_string(), "--non-interactive".to_string()],
+        )
+        .await;
+        env::set_current_dir(original_dir).expect("restore cwd");
+
+        let error = result.expect_err("setup should fail without values");
+        assert!(error.to_string().contains("automation-first setup"));
+    }
+
+    #[derive(Clone)]
+    struct FailingManifestApi;
+
+    #[async_trait::async_trait]
+    impl setup::SlackManifestApi for FailingManifestApi {
+        async fn create_app(
+            &self,
+            _config_token: &str,
+            _manifest_json: &str,
+        ) -> anyhow::Result<setup::SlackManifestCreateResponse> {
+            anyhow::bail!("invalid_auth")
+        }
+    }
+
+    #[derive(Clone)]
+    struct SuccessfulManifestApi;
+
+    #[async_trait::async_trait]
+    impl setup::SlackManifestApi for SuccessfulManifestApi {
+        async fn create_app(
+            &self,
+            _config_token: &str,
+            _manifest_json: &str,
+        ) -> anyhow::Result<setup::SlackManifestCreateResponse> {
+            Ok(setup::SlackManifestCreateResponse {
+                app_id: "A123".into(),
+                oauth_authorize_url: "https://slack.com/oauth/v2/authorize?client_id=123".into(),
+                credentials: setup::SlackManifestCreateCredentials {
+                    client_id: "111.222".into(),
+                    client_secret: "secret".into(),
+                    verification_token: "verification".into(),
+                    signing_secret: "signing-secret".into(),
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_api_failure_falls_back_to_manual_route() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+
+        let input = setup::SetupInput {
+            slack_app_configuration_token: Some("xoxa-test".into()),
+            channel_id: Some("C123".into()),
+            project_root: Some(workspace_root.display().to_string()),
+            project_label: Some("demo-project".into()),
+            ..Default::default()
+        };
+        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Confirm]);
+
+        let result = setup::run_setup_with_manifest_api(
+            &FailingManifestApi,
+            workspace_root,
+            input,
+            &mut prompter,
+        )
+        .await;
+
+        let error = result.expect_err("setup should fall back to manual-assisted route");
+        assert!(error.to_string().contains("Slack app approval is still required"));
+    }
+
+    #[tokio::test]
+    async fn manifest_api_success_writes_creation_fields_into_pending_artifact() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+
+        let input = setup::SetupInput {
+            slack_app_configuration_token: Some("xoxa-test".into()),
+            channel_id: Some("C123".into()),
+            project_root: Some(workspace_root.display().to_string()),
+            project_label: Some("demo-project".into()),
+            ..Default::default()
+        };
+        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Confirm]);
+
+        let result = setup::run_setup_with_manifest_api(
+            &SuccessfulManifestApi,
+            workspace_root,
+            input,
+            &mut prompter,
+        )
+        .await;
+
+        let error = result.expect_err("setup should still proceed through manual token collection");
+        assert!(error.to_string().contains("Slack app approval is still required"));
+
+        let artifact = setup::load_slack_setup_artifact_from_file(
+            &workspace_root.join(".local").join("slack-setup-artifact.json"),
+        )
+        .expect("load artifact");
+        assert_eq!(artifact.slack.app_id.as_deref(), Some("A123"));
+        assert_eq!(artifact.slack.oauth_authorize_url.as_deref(), Some("https://slack.com/oauth/v2/authorize?client_id=123"));
+        assert_eq!(artifact.slack.signing_secret.as_deref(), Some("signing-secret"));
+    }
+
+    #[tokio::test]
+    async fn run_setup_accepts_slack_artifact_file_in_non_interactive_mode() {
+        let _guard = cwd_lock();
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
+
+        let artifact_path = workspace_root.join("slack-artifact.json");
+        fs::write(
+            &artifact_path,
+            r#"{
+  "slack": {
+    "botToken": "xoxb-artifact",
+    "signingSecret": "signing-artifact",
+    "appToken": "xapp-artifact",
+    "allowedUserId": "UARTIFACT"
+  },
+  "channel": {
+    "id": "CARTIFACT",
+    "projectRoot": "/tmp/project",
+    "projectLabel": "artifact-project"
+  }
+}"#,
+        )
+        .expect("write artifact file");
+
+        let config = AppConfig {
+            state_db_path: workspace_root.join(".local/state.db"),
+            channel_project_store_path: workspace_root.join("data/channel-projects.json"),
+            runtime_working_directory: workspace_root.display().to_string(),
+            runtime_launch_command: "claude".to_string(),
+            runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+        };
+
+        let original_dir = env::current_dir().expect("cwd");
+        env::set_current_dir(workspace_root).expect("chdir");
+        let result = setup::run_setup(
+            &config,
+            &[
+                "rcc".to_string(),
+                "setup".to_string(),
+                "--from-slack-artifact".to_string(),
+                artifact_path.display().to_string(),
+                "--non-interactive".to_string(),
+            ],
+        )
+        .await;
+        env::set_current_dir(original_dir).expect("restore cwd");
+
+        let error = result.expect_err("doctor should still fail on project_root validation or local state");
+        assert!(!error.to_string().contains("missing required fields for automation-first setup"));
+    }
+
+    #[tokio::test]
     async fn execute_setup_accepts_pre_resolved_input_without_prompting() {
+        let _guard = slack_env_lock();
+        let previous_bot = env::var_os("SLACK_BOT_TOKEN");
+        let previous_signing = env::var_os("SLACK_SIGNING_SECRET");
+        let previous_app = env::var_os("SLACK_APP_TOKEN");
+        let previous_user = env::var_os("SLACK_ALLOWED_USER_ID");
+
         let temp_dir = tempdir().expect("create temp dir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
@@ -593,6 +1315,7 @@ mod tests {
             slack_signing_secret: Some("signing-secret".into()),
             slack_app_token: Some("xapp-app".into()),
             slack_allowed_user_id: Some("U123".into()),
+            slack_app_configuration_token: None,
             channel_id: Some("C123".into()),
             project_root: Some(workspace_root.display().to_string()),
             project_label: Some("demo-project".into()),
@@ -600,6 +1323,23 @@ mod tests {
 
         let mut prompter = setup::FakePrompter::new(vec![]);
         let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
+
+        match previous_bot {
+            Some(value) => unsafe { env::set_var("SLACK_BOT_TOKEN", value) },
+            None => unsafe { env::remove_var("SLACK_BOT_TOKEN") },
+        }
+        match previous_signing {
+            Some(value) => unsafe { env::set_var("SLACK_SIGNING_SECRET", value) },
+            None => unsafe { env::remove_var("SLACK_SIGNING_SECRET") },
+        }
+        match previous_app {
+            Some(value) => unsafe { env::set_var("SLACK_APP_TOKEN", value) },
+            None => unsafe { env::remove_var("SLACK_APP_TOKEN") },
+        }
+        match previous_user {
+            Some(value) => unsafe { env::set_var("SLACK_ALLOWED_USER_ID", value) },
+            None => unsafe { env::remove_var("SLACK_ALLOWED_USER_ID") },
+        }
 
         assert!(result.is_ok(), "{result:?}");
         assert!(fs::read_to_string(workspace_root.join(".env.local"))
@@ -718,6 +1458,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recover_active_sessions_marks_failed_sessions_when_runtime_recovery_cannot_start() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let database_path = temp_dir.path().join("nested").join("state.db");
+        let app = build_app(AppConfig {
+            state_db_path: database_path,
+            channel_project_store_path: temp_dir.path().join("channel-projects.json"),
+            runtime_working_directory: "/tmp/project".to_string(),
+            runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
+            runtime_hook_events_directory: "/tmp/hooks".to_string(),
+            runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+        })
+        .expect("build app");
+        let session_id = core_model::SessionId::new();
+        let turn_id = TurnId::new();
+        app.repository
+            .save_state(session_id, &SessionState::Running { active_turn: turn_id })
+            .await
+            .expect("save running state");
+
+        let previous_path = env::var_os("PATH");
+        unsafe { env::set_var("PATH", "") };
+        let result = app.recover_active_sessions().await;
+        match previous_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+
+        assert!(result.is_ok());
+        let persisted = app
+            .repository
+            .load_state(session_id)
+            .await
+            .expect("load state after recovery attempt")
+            .expect("persisted state");
+        assert!(matches!(
+            persisted,
+            SessionState::Failed { reason } if reason.contains("recover failed:")
+        ));
+    }
+
+    #[tokio::test]
     async fn app_recovers_running_sessions_into_runtime_pending_turns() {
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
@@ -747,6 +1528,7 @@ mod tests {
 
     #[test]
     fn app_reads_slack_socket_mode_config_from_env() {
+        let _guard = slack_env_lock();
         let previous_bot = env::var_os("SLACK_BOT_TOKEN");
         let previous_app = env::var_os("SLACK_APP_TOKEN");
         unsafe {
@@ -794,8 +1576,11 @@ mod tests {
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
         fs::write(workspace_root.join("slack").join("app-manifest.json"), "{}")
             .expect("write manifest");
-        fs::write(workspace_root.join(".env.local"), "SLACK_BOT_TOKEN=xoxb-test\n")
-            .expect("write env");
+        fs::write(
+            workspace_root.join(".env.local"),
+            "SLACK_BOT_TOKEN=xoxb-test\nSLACK_APP_TOKEN=xapp-test\nSLACK_SIGNING_SECRET=signing-test\nSLACK_ALLOWED_USER_ID=U123\n",
+        )
+        .expect("write env");
         fs::create_dir_all(workspace_root.join("data")).expect("create data dir");
         fs::write(
             workspace_root.join("data").join("channel-projects.json"),

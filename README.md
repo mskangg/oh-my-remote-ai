@@ -37,21 +37,32 @@
 
 ## Quickstart
 
-Human:
+### 가장 빠른 경로: API-first setup
+
+Slack app configuration token이 이미 있다면, `setup`은 먼저 `apps.manifest.create`를 시도할 수 있습니다.
+
+```bash
+cargo run -p rcc -- setup --slack-config-token <xoxa-config-token>
+cargo run -p rcc -- doctor
+cargo build --release -p rcc
+./target/release/rcc
+```
+
+### 검증된 경로: guided semi-automatic setup
+
+config token이 없으면, `setup`은 검증된 guided fallback 경로로 내려갑니다.
+
 ```bash
 cargo run -p rcc -- setup
+# setup이 안내하는 Slack 콘솔 단계를 따라갑니다
+cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch.example.json --json
+cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
 cargo run -p rcc -- doctor
-cargo run -p rcc
+cargo build --release -p rcc
+./target/release/rcc
 ```
 
-Automation / Claude / smoke:
-```bash
-cargo run -p rcc -- setup --from-file docs/setup.example.json
-cargo run -p rcc -- doctor
-cargo run -p rcc
-```
-
-`setup`은 Slack bot onboarding 링크 안내, manifest 경로 안내, 토큰 입력, channel mapping 작성, 그리고 마지막 `doctor` 검증까지 순서대로 진행합니다.
+`setup`은 이제 automation-first 설치 마법사입니다. 먼저 기존 값을 재사용하고, app configuration token이 있으면 Slack app creation을 manifest API로 시도합니다. API 생성이 불가능하거나 실패하면, 검증된 semi-automatic Slack 콘솔 경로로 자연스럽게 fallback한 뒤 artifact 기반 resume, `doctor`, release build까지 이어집니다.
 
 앱 실행 뒤 Slack에서 `/cc`를 실행하면 됩니다.
 
@@ -98,7 +109,9 @@ cargo run -p rcc -- doctor
 ## Setup and docs
 
 - Slack 설정: [`docs/slack-setup.md`](docs/slack-setup.md)
-- 수동 점검: [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md)
+- Setup baseline example: [`docs/setup.example.json`](docs/setup.example.json)
+- Slack setup artifact example: [`docs/slack-setup-artifact.example.json`](docs/slack-setup-artifact.example.json)
+- Slack setup artifact patch example: [`docs/slack-setup-artifact-patch.example.json`](docs/slack-setup-artifact-patch.example.json)
 - Hero export: [`docs/hero-export.md`](docs/hero-export.md)
 - 런치 카피 팩: [`docs/launch-copy.ko.md`](docs/launch-copy.ko.md)
 
@@ -112,6 +125,7 @@ cargo run -p rcc -- doctor
 ## Current limitations
 
 - 현재 공개 대상은 Slack 기준으로 설계되어 있습니다.
-- `rcc setup slack`은 아직 구현되지 않았습니다.
-- 지금은 `.env.local`과 Slack 앱 생성이 필요합니다.
+- `apps.manifest.create`를 쓰려면 app configuration token이 필요합니다.
+- Slack 앱 생성이 API로 끝나더라도 설치 승인과 일부 토큰 회수 단계는 여전히 manual-assisted flow가 남을 수 있습니다.
+- `.env.local`, channel mapping, `doctor`, release build handoff는 setup이 자동으로 연결합니다.
 - 런타임/운영 안정성은 계속 강화 중입니다.

@@ -1,0 +1,8 @@
+{
+  "slack": {
+    "appToken": "xapp-your-app-token"
+  },
+  "channel": {
+    "projectLabel": "my-project"
+  }
+}
