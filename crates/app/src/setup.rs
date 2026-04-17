@@ -814,6 +814,10 @@ pub fn pending_install_script_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".local").join("install-rcc.sh")
 }
 
+pub fn install_source_binary_path() -> Result<PathBuf> {
+    Ok(std::env::current_exe().context("resolve current executable path")?)
+}
+
 pub fn build_shell_install_script(
     source_binary_path: &Path,
     install_path: &Path,
@@ -992,8 +996,9 @@ pub async fn execute_setup(
         let install_path = default_install_path()?;
         let profile_path = default_shell_profile_path()?;
         let installer_script_path = pending_install_script_path(workspace_root);
+        let source_binary_path = install_source_binary_path()?;
         let installer_script = build_shell_install_script(
-            Path::new("./target/release/rcc"),
+            &source_binary_path,
             &install_path,
             &profile_path,
             workspace_root,

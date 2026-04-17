@@ -713,6 +713,13 @@ mod tests {
         assert!(script.contains("exec \"/Users/demo/.local/bin/rcc.bin\" \"$@\""));
     }
 
+    #[test]
+    fn install_source_binary_path_uses_current_executable() {
+        let path = setup::install_source_binary_path().expect("current executable path");
+        assert!(path.is_absolute());
+        assert_ne!(path, std::path::PathBuf::from("./target/release/rcc"));
+    }
+
     #[tokio::test]
     async fn execute_setup_runs_installer_script_when_user_confirms() {
         let _guard = slack_env_lock();
