@@ -365,14 +365,20 @@ pub enum CliCommand {
     Doctor,
     Setup,
     Service(ServiceCommand),
+    Help,
+    Version,
+    Invalid(String),
 }
 
 pub fn parse_cli_command(args: &[String]) -> CliCommand {
     match args.get(1).map(|value| value.as_str()) {
+        None => CliCommand::Run,
         Some("doctor") => CliCommand::Doctor,
         Some("setup") => CliCommand::Setup,
         Some("service") => CliCommand::Service(parse_service_command(args)),
-        _ => CliCommand::Run,
+        Some("help") | Some("--help") | Some("-h") => CliCommand::Help,
+        Some("version") | Some("--version") | Some("-V") => CliCommand::Version,
+        Some(other) => CliCommand::Invalid(other.to_string()),
     }
 }
 
@@ -422,6 +428,24 @@ mod tests {
     fn parse_service_command_defaults_to_status() {
         let args = vec!["rcc".to_string(), "service".to_string()];
         assert_eq!(parse_service_command(&args), ServiceCommand::Status);
+    }
+
+    #[test]
+    fn parse_cli_command_detects_help_flag() {
+        let args = vec!["rcc".to_string(), "--help".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Help);
+    }
+
+    #[test]
+    fn parse_cli_command_detects_version_flag() {
+        let args = vec!["rcc".to_string(), "--version".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Version);
+    }
+
+    #[test]
+    fn parse_cli_command_rejects_unknown_top_level_argument() {
+        let args = vec!["rcc".to_string(), "nonsense".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Invalid("nonsense".to_string()));
     }
 
     #[test]

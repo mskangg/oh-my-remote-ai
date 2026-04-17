@@ -1,6 +1,8 @@
 use std::{env, path::PathBuf, sync::Arc};
 
 use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, AppConfig, CliCommand, ServiceCommand};
+
+const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|start|stop|status>|--help|--version]";
 use rcc::setup::run_setup;
 use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
@@ -45,6 +47,18 @@ async fn main() {
             };
             println!("{message}");
             return;
+        }
+        CliCommand::Help => {
+            println!("{HELP_TEXT}");
+            return;
+        }
+        CliCommand::Version => {
+            println!(env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        CliCommand::Invalid(arg) => {
+            eprintln!("Unknown command or flag: {arg}\n{HELP_TEXT}");
+            std::process::exit(2);
         }
         CliCommand::Run => {}
     }
