@@ -64,6 +64,9 @@ manifest가 필요하면 아래 중 하나를 제공한다.
 4. `allowedUserId`
    - 형식: `U...`
    - 위치: 프로필 → 세 점 → `Copy member ID`
+5. `channelId`
+   - 형식: `C...`
+   - 위치: 사용할 채널 열기 → 채널 세부정보 → 맨 아래 `Copy channel ID`
 
 ### 6. Use the artifact bridge for all machine steps
 기본 artifact 경로:
@@ -128,18 +131,23 @@ cargo build --release -p rcc
 
 ### Step 7. Bot token
 > 좋아요. 다음은 `Bot User OAuth Token`입니다.
-> 형식: `xoxb-...`
-> 위치: `OAuth & Permissions` → 설치 후 확인
+> 먼저 `OAuth & Permissions`로 가서 **`Install to 'your-workspace'`** 를 누르세요.
+> 설치가 끝나면 같은 화면의 **OAuth Tokens** 섹션에 `Bot User OAuth Token`(`xoxb-...`)이 생성됩니다.
+> 그 값을 보내주세요.
 
 ### Step 8. App-level token
 > 다음은 `App-Level Token`입니다.
 > `connections:write` 권한으로 만든 `xapp-...` 값을 보내주세요.
 
 ### Step 9. Allowed user ID
-> 마지막으로 `allowedUserId`가 필요합니다.
+> 다음은 `allowedUserId`입니다.
 > Slack에서 `프로필 → 세 점 → Copy member ID`로 확인한 `U...` 값을 보내주세요.
 
-### Step 10. Artifact readiness
+### Step 10. Channel ID
+> 이제 `channelId`가 필요합니다.
+> 사용할 채널을 열고 채널 세부정보를 연 뒤, 맨 아래의 `Copy channel ID`를 눌러 `C...` 값을 보내주세요.
+
+### Step 11. Artifact readiness
 부족할 때:
 > 아직 바로 재개할 수는 없어요.
 > 부족한 값:

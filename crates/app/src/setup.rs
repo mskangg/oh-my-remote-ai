@@ -26,29 +26,50 @@ pub struct SetupInput {
 impl SetupInput {
     pub fn missing_fields(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
-        if self.slack_bot_token.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.slack_bot_token.as_deref()) {
             missing.push("slack_bot_token");
         }
-        if self.slack_signing_secret.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.slack_signing_secret.as_deref()) {
             missing.push("slack_signing_secret");
         }
-        if self.slack_app_token.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.slack_app_token.as_deref()) {
             missing.push("slack_app_token");
         }
-        if self.slack_allowed_user_id.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.slack_allowed_user_id.as_deref()) {
             missing.push("slack_allowed_user_id");
         }
-        if self.channel_id.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.channel_id.as_deref()) {
             missing.push("channel_id");
         }
-        if self.project_root.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.project_root.as_deref()) {
             missing.push("project_root");
         }
-        if self.project_label.as_deref().unwrap_or("").is_empty() {
+        if is_missing_setup_value(self.project_label.as_deref()) {
             missing.push("project_label");
         }
         missing
     }
+}
+
+fn is_missing_setup_value(value: Option<&str>) -> bool {
+    let Some(value) = value.map(str::trim) else {
+        return true;
+    };
+
+    if value.is_empty() {
+        return true;
+    }
+
+    matches!(
+        value,
+        "xoxb-your-bot-token"
+            | "your-signing-secret"
+            | "xapp-your-app-token"
+            | "U12345678"
+            | "C12345678"
+            | "/absolute/path/to/your/project"
+            | "my-project"
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,10 +202,7 @@ impl SlackManifestApi for ReqwestSlackManifestApi {
     ) -> Result<SlackManifestCreateResponse> {
         let response = reqwest::Client::new()
             .post("https://slack.com/api/apps.manifest.create")
-            .json(&serde_json::json!({
-                "token": config_token,
-                "manifest": manifest_json,
-            }))
+            .form(&[("token", config_token), ("manifest", manifest_json)])
             .send()
             .await
             .context("send apps.manifest.create request")?;
@@ -502,6 +520,15 @@ pub fn write_slack_setup_artifact_template(path: &Path, input: &SetupInput) -> R
 
 pub fn load_slack_manifest_json(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("read Slack manifest JSON: {}", path.display()))
+}
+
+pub fn build_manifest_create_form_body(config_token: &str, manifest_json: &str) -> Result<String> {
+    let encoded = serde_urlencoded::to_string([
+        ("token", config_token),
+        ("manifest", manifest_json),
+    ])
+    .context("encode manifest create request body")?;
+    Ok(encoded)
 }
 
 pub fn load_setup_input_from_file(path: &Path) -> Result<SetupInput> {

@@ -93,6 +93,13 @@ non-interactive 규칙:
 - `SLACK_APP_TOKEN`
 - `SLACK_ALLOWED_USER_ID`
 
+### `SLACK_BOT_TOKEN` 얻는 방법
+
+1. `OAuth & Permissions`로 이동
+2. **`Install to 'your-workspace'`** 를 클릭
+3. 설치가 끝나면 같은 화면의 **OAuth Tokens** 섹션에 `Bot User OAuth Token`(`xoxb-...`)이 생성됩니다.
+4. 그 값을 복사합니다.
+
 ## Manifest-first setup
 
 번들된 manifest 경로:
@@ -112,6 +119,14 @@ non-interactive 규칙:
 - `channelId`
 - `projectRoot`
 - `projectLabel`
+
+### `channelId` 얻는 방법
+
+1. Slack에서 사용할 채널을 엽니다.
+2. 채널 세부정보를 엽니다.
+3. 맨 아래의 **`Copy channel ID`** 를 눌러 `C...` 값을 복사합니다.
+
+채널 URL 마지막의 `C...` 값을 복사하는 방법도 있지만, 기본 안내는 채널 세부정보의 `Copy channel ID`를 권장합니다.
 
 ## Doctor가 확인하는 것
 

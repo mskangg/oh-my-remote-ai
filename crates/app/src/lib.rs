@@ -634,6 +634,40 @@ mod tests {
     }
 
     #[test]
+    fn slack_artifact_template_placeholders_are_treated_as_missing() {
+        let artifact = setup::SlackSetupArtifact {
+            slack: setup::SlackArtifactValues {
+                bot_token: Some("xoxb-your-bot-token".into()),
+                signing_secret: Some("your-signing-secret".into()),
+                app_token: Some("xapp-your-app-token".into()),
+                allowed_user_id: Some("U12345678".into()),
+                app_configuration_token: None,
+                app_id: None,
+                oauth_authorize_url: None,
+            },
+            channel: setup::SlackArtifactChannel {
+                id: Some("C12345678".into()),
+                project_root: Some("/absolute/path/to/your/project".into()),
+                project_label: Some("my-project".into()),
+            },
+        };
+
+        let missing = setup::slack_artifact_missing_fields(&artifact);
+        assert_eq!(
+            missing,
+            vec![
+                "slack_bot_token",
+                "slack_signing_secret",
+                "slack_app_token",
+                "slack_allowed_user_id",
+                "channel_id",
+                "project_root",
+                "project_label"
+            ]
+        );
+    }
+
+    #[test]
     fn apply_manifest_create_response_updates_artifact_with_creation_fields() {
         let artifact = setup::SlackSetupArtifact::default();
         let response = setup::SlackManifestCreateResponse {
@@ -1229,6 +1263,16 @@ mod tests {
         assert_eq!(artifact.slack.app_id.as_deref(), Some("A123"));
         assert_eq!(artifact.slack.oauth_authorize_url.as_deref(), Some("https://slack.com/oauth/v2/authorize?client_id=123"));
         assert_eq!(artifact.slack.signing_secret.as_deref(), Some("signing-secret"));
+    }
+
+    #[test]
+    fn manifest_api_request_path_uses_form_encoding_contract() {
+        let form = setup::build_manifest_create_form_body("xoxe-token", "{\"display_information\":{}}")
+            .expect("build form body");
+
+        assert!(form.contains("token=xoxe-token"));
+        assert!(form.contains("manifest="));
+        assert!(!form.contains("Authorization"));
     }
 
     #[tokio::test]
