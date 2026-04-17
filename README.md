@@ -70,6 +70,7 @@ remote-claude-code 셋업해줘
 setup wizard는 다음 순서로 진행됩니다.
 - 로컬 환경 확인
 - 먼저 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**인 `app configuration token` 발급 단계 안내
+  - 링크: `https://api.slack.com/apps`
 - token이 준비되면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
 - API 생성이 실패하면 검증된 semi-automatic Slack 콘솔 경로로 fallback
 - 필요한 값을 한 단계씩 수집

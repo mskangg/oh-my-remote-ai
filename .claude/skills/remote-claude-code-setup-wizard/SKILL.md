@@ -133,6 +133,8 @@ cargo build --release -p rcc
 > 이 토큰은 **Slack 앱을 자동 생성할 때 쓰는 전용 토큰**입니다.
 > 발급된 뒤에는 제가 Slack 앱 생성을 먼저 자동으로 시도할 수 있어요.
 >
+> 링크: `https://api.slack.com/apps`
+>
 > 1. Slack 앱 관리 화면으로 이동
 > 2. `Generate Token` 클릭
 > 3. 사용할 workspace 선택

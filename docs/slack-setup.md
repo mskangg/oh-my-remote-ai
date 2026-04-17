@@ -41,6 +41,8 @@ cargo build --release -p rcc
 `setup`의 기본 경로는 먼저 **Slack app configuration token**을 발급받고, 그 뒤 `apps.manifest.create`를 시도하는 것입니다.
 이 토큰은 Slack 앱을 자동 생성할 때 쓰는 전용 토큰이며, 12시간 동안만 유효합니다.
 
+링크: `https://api.slack.com/apps`
+
 1. Slack 앱 관리 화면으로 이동
 2. `Generate Token` 클릭
 3. 사용할 workspace 선택

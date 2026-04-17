@@ -11,7 +11,7 @@ Guided setup wizard plugin for Remote Claude Code.
 - `doctor` verification
 - Final release binary guidance
 
-A Slack app configuration token is the token used to create the Slack app automatically. If the user does not have one yet, the setup wizard explains where to generate it and which workspace to choose before continuing.
+A Slack app configuration token is the token used to create the Slack app automatically. If the user does not have one yet, the setup wizard sends them to `https://api.slack.com/apps`, tells them to use `Generate Token`, select the workspace, and then continue with that token.
 
 ## Best path
 
