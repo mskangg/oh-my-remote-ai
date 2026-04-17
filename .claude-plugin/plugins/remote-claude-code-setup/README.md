@@ -7,6 +7,7 @@ Guided setup wizard plugin for Remote Claude Code.
 - API-first Slack app creation through `apps.manifest.create` when a **Slack app configuration token** is available
 - Verified semi-automatic Slack fallback when API creation is unavailable or fails
 - Step-by-step collection of required Slack values
+- Slack manifest delivery via GitHub blob link, raw link, or inline JSON
 - Artifact-based setup resume flow
 - `doctor` verification
 - Final release binary guidance

@@ -117,6 +117,10 @@ non-interactive 규칙:
 
 `slack/app-manifest.json`
 
+복사하기 쉬운 링크:
+- GitHub 보기용: `https://github.com/mskangg/remote-claude-code/blob/main/slack/app-manifest.json`
+- raw: `https://raw.githubusercontent.com/mskangg/remote-claude-code/main/slack/app-manifest.json`
+
 현재 manifest는 public channel에서 `/cc` 루트 메시지를 생성할 수 있도록 필요한 scope를 포함합니다. private channel에서는 테스트 전에 bot을 초대해야 합니다.
 
 ## Channel mapping

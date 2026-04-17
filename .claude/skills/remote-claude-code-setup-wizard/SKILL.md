@@ -58,8 +58,8 @@ config token 발급 안내는 이렇게 한다.
 - 완료 후 `계속`
 
 manifest가 필요하면 아래 중 하나를 제공한다.
-- GitHub 링크
-- raw 링크
+- GitHub 보기용 링크: `https://github.com/mskangg/remote-claude-code/blob/main/slack/app-manifest.json`
+- raw 링크: `https://raw.githubusercontent.com/mskangg/remote-claude-code/main/slack/app-manifest.json`
 - inline JSON
 
 ### 5. Collect values one at a time

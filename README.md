@@ -73,6 +73,9 @@ setup wizard는 다음 순서로 진행됩니다.
   - 링크: `https://api.slack.com/apps`
 - token이 준비되면 `apps.manifest.create`로 Slack 앱 생성 자동 시도
 - API 생성이 실패하면 검증된 semi-automatic Slack 콘솔 경로로 fallback
+- Slack 콘솔 단계에서는 manifest를 아래 중 편한 방식으로 제공합니다.
+  - 보기용: `https://github.com/mskangg/remote-claude-code/blob/main/slack/app-manifest.json`
+  - raw: `https://raw.githubusercontent.com/mskangg/remote-claude-code/main/slack/app-manifest.json`
 - 필요한 값을 한 단계씩 수집
 - artifact 기반 resume
 - `doctor`
