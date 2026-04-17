@@ -671,6 +671,7 @@ mod tests {
             std::path::Path::new("/tmp/build/rcc"),
             std::path::Path::new("/Users/demo/.local/bin/rcc"),
             std::path::Path::new("/Users/demo/.zshrc"),
+            std::path::Path::new("/Users/demo/work/project"),
         );
 
         assert!(script.contains("install -m 755"));
@@ -695,6 +696,21 @@ mod tests {
         );
         assert!(message.contains("/tmp/workspace/.local/install-rcc.sh"));
         assert!(message.contains("sh /tmp/workspace/.local/install-rcc.sh"));
+    }
+
+    #[test]
+    fn install_script_wraps_workspace_root_and_env_file() {
+        let script = setup::build_shell_install_script(
+            std::path::Path::new("/tmp/build/rcc"),
+            std::path::Path::new("/Users/demo/.local/bin/rcc"),
+            std::path::Path::new("/Users/demo/.zshrc"),
+            std::path::Path::new("/Users/demo/work/project"),
+        );
+
+        assert!(script.contains("cd \"/Users/demo/work/project\""));
+        assert!(script.contains("export RCC_PROJECT_ROOT=\"/Users/demo/work/project\""));
+        assert!(script.contains("export RCC_ENV_FILE=\"/Users/demo/work/project/.env.local\""));
+        assert!(script.contains("exec \"/Users/demo/.local/bin/rcc.bin\" \"$@\""));
     }
 
     #[tokio::test]

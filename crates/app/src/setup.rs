@@ -814,15 +814,28 @@ pub fn pending_install_script_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".local").join("install-rcc.sh")
 }
 
-pub fn build_shell_install_script(source_binary_path: &Path, install_path: &Path, profile_path: &Path) -> String {
+pub fn build_shell_install_script(
+    source_binary_path: &Path,
+    install_path: &Path,
+    profile_path: &Path,
+    workspace_root: &Path,
+) -> String {
+    let launcher_path = install_path.display().to_string();
+    let binary_target = format!("{}.bin", launcher_path);
     format!(
-        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\"\ninstall -m 755 \"{}\" \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc to {}\\n'\nprintf 'Open a new shell or run: . {}\\n'\n",
+        "#!/usr/bin/env sh\nset -eu\nmkdir -p \"{}\"\ninstall -m 755 \"{}\" \"{}\"\ncat > \"{}\" <<'EOF'\n#!/usr/bin/env sh\nset -eu\ncd \"{}\"\nexport RCC_PROJECT_ROOT=\"{}\"\nexport RCC_ENV_FILE=\"{}/.env.local\"\nexec \"{}\" \"$@\"\nEOF\nchmod 755 \"{}\"\nif ! grep -Fq 'export PATH=\"$HOME/.local/bin:$PATH\"' \"{}\" 2>/dev/null; then\n  printf '\nexport PATH=\"$HOME/.local/bin:$PATH\"\n' >> \"{}\"\nfi\nprintf 'Installed rcc launcher to {}\\n'\nprintf 'Open a new shell or run: source {}\\n'\n",
         install_path.parent().map(|path| path.display().to_string()).unwrap_or_else(|| ".".to_string()),
         source_binary_path.display(),
-        install_path.display(),
+        binary_target,
+        launcher_path,
+        workspace_root.display(),
+        workspace_root.display(),
+        workspace_root.display(),
+        binary_target,
+        launcher_path,
         profile_path.display(),
         profile_path.display(),
-        install_path.display(),
+        launcher_path,
         profile_path.display(),
     )
 }
@@ -979,7 +992,12 @@ pub async fn execute_setup(
         let install_path = default_install_path()?;
         let profile_path = default_shell_profile_path()?;
         let installer_script_path = pending_install_script_path(workspace_root);
-        let installer_script = build_shell_install_script(Path::new("./target/release/rcc"), &install_path, &profile_path);
+        let installer_script = build_shell_install_script(
+            Path::new("./target/release/rcc"),
+            &install_path,
+            &profile_path,
+            workspace_root,
+        );
         if let Some(parent) = install_path.parent() {
             fs::create_dir_all(parent)?;
         }
