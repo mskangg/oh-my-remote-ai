@@ -355,6 +355,26 @@ pub mod locale;
 pub mod service;
 pub mod setup;
 
+/// Shared test helpers — compiled only during `cargo test`.
+///
+/// Placing the lock statics here (crate root) ensures every test module in
+/// this crate shares the **same** `OnceLock` instance, which is required for
+/// the locks to actually serialise access across modules.
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serialises tests that mutate the `HOME` environment variable.
+    ///
+    /// Both `lib.rs` and `service.rs` tests modify HOME; this single lock
+    /// prevents them from racing each other in the same test binary.
+    pub(crate) fn home_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let mutex = LOCK.get_or_init(|| Mutex::new(()));
+        mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceCommand {
     Install,
@@ -402,18 +422,61 @@ pub fn parse_service_command(args: &[String]) -> ServiceCommand {
 mod tests {
     use core_model::{SessionState, TurnId};
     use core_service::SessionRepository;
+    use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
     use transport_slack::{SlackSessionStart, SlackSocketModeConfig};
 
     use super::*;
 
+    /// RAII guard that restores an environment variable on drop.
+    ///
+    /// Restoration runs even when the test panics (Rust unwinds the stack and
+    /// calls `Drop` before the panic propagates), so env-var state can never
+    /// leak to other tests.
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        /// Snapshot `key`, then set it to `value`.
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = env::var_os(key);
+            // Safety: tests run single-process; all env-mutating tests
+            // serialise via `slack_env_lock` or `cwd_lock`.
+            unsafe { env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        /// Snapshot `key`, then remove it.
+        fn remove(key: &'static str) -> Self {
+            let previous = env::var_os(key);
+            unsafe { env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(v) => unsafe { env::set_var(self.key, v) },
+                None => unsafe { env::remove_var(self.key) },
+            }
+        }
+    }
+
+    /// Serialises tests that mutate `SLACK_*` environment variables.
+    ///
+    /// Recovers from mutex poison so one panicking test does not permanently
+    /// block the others; the actual env-var cleanup is handled by `EnvGuard`.
     fn slack_env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let mutex = LOCK.get_or_init(|| Mutex::new(()));
         mutex.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 
+    /// Serialises tests that call `env::set_current_dir`.
     fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let mutex = LOCK.get_or_init(|| Mutex::new(()));
@@ -643,40 +706,25 @@ mod tests {
 
     #[test]
     fn install_path_defaults_to_user_local_bin() {
-        let previous = env::var_os("HOME");
-        unsafe { env::set_var("HOME", "/Users/demo") };
+        let _hlock = crate::test_helpers::home_env_lock();
+        let _home = EnvGuard::set("HOME", "/Users/demo");
 
         let path = setup::default_install_path().expect("install path");
 
-        match previous {
-            Some(value) => unsafe { env::set_var("HOME", value) },
-            None => unsafe { env::remove_var("HOME") },
-        }
-
         assert_eq!(path, std::path::PathBuf::from("/Users/demo/.local/bin/rcc"));
+        // EnvGuard restores HOME on drop.
     }
 
     #[test]
     fn install_profile_path_prefers_zshrc_for_zsh_shell() {
-        let previous_home = env::var_os("HOME");
-        let previous_shell = env::var_os("SHELL");
-        unsafe {
-            env::set_var("HOME", "/Users/demo");
-            env::set_var("SHELL", "/bin/zsh");
-        }
+        let _hlock = crate::test_helpers::home_env_lock();
+        let _home = EnvGuard::set("HOME", "/Users/demo");
+        let _shell = EnvGuard::set("SHELL", "/bin/zsh");
 
         let path = setup::default_shell_profile_path().expect("shell profile");
 
-        match previous_home {
-            Some(value) => unsafe { env::set_var("HOME", value) },
-            None => unsafe { env::remove_var("HOME") },
-        }
-        match previous_shell {
-            Some(value) => unsafe { env::set_var("SHELL", value) },
-            None => unsafe { env::remove_var("SHELL") },
-        }
-
         assert_eq!(path, std::path::PathBuf::from("/Users/demo/.zshrc"));
+        // EnvGuards restore HOME and SHELL on drop.
     }
 
     #[test]
@@ -738,6 +786,7 @@ mod tests {
     #[tokio::test]
     async fn run_setup_non_interactive_builds_release_binary_before_install() {
         let _guard = cwd_lock();
+        let _hlock = crate::test_helpers::home_env_lock();
         let temp_dir = tempdir().expect("create temp dir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
@@ -789,39 +838,45 @@ mod tests {
     #[tokio::test]
     async fn execute_setup_runs_installer_script_when_user_confirms() {
         let _guard = slack_env_lock();
-        let previous_home = env::var_os("HOME");
-        let previous_shell = env::var_os("SHELL");
-        let previous_path = env::var_os("PATH");
+        let _hlock = crate::test_helpers::home_env_lock();
 
         let temp_dir = tempdir().expect("create temp dir");
         let workspace_root = temp_dir.path();
-        unsafe {
-            env::set_var("HOME", workspace_root);
-            env::set_var("SHELL", "/bin/zsh");
-            env::set_var("PATH", "/usr/bin:/bin");
-        }
+
+        // EnvGuard restores all env vars on drop, even if the test panics.
+        let _home = EnvGuard::set("HOME", workspace_root);
+        let _shell = EnvGuard::set("SHELL", "/bin/zsh");
+
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
         fs::write(workspace_root.join("slack/app-manifest.json"), "{}\n").expect("write manifest");
         fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+
         let bin_dir = workspace_root.join("bin");
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::write(bin_dir.join("tmux"), "#!/bin/sh\nexit 0\n").expect("write fake tmux");
-        let mut perms = fs::metadata(bin_dir.join("tmux")).expect("tmux metadata").permissions();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(bin_dir.join("tmux")).expect("tmux metadata").permissions();
             perms.set_mode(0o755);
             fs::set_permissions(bin_dir.join("tmux"), perms).expect("chmod fake tmux");
         }
-        unsafe { env::set_var("PATH", format!("{}:/usr/bin:/bin", bin_dir.display())) };
+        // Prepend fake bin to real PATH so system tools (claude, etc.) stay reachable.
+        let system_path = env::var("PATH").unwrap_or_default();
+        let _path = EnvGuard::set("PATH", format!("{}:{}", bin_dir.display(), system_path));
+
         fs::create_dir_all(workspace_root.join("target/release")).expect("create release dir");
-        fs::write(workspace_root.join("target/release/rcc"), "#!/bin/sh\nexit 0\n").expect("write fake release binary");
+        fs::write(workspace_root.join("target/release/rcc"), "#!/bin/sh\nexit 0\n")
+            .expect("write fake release binary");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut release_perms = fs::metadata(workspace_root.join("target/release/rcc")).expect("release metadata").permissions();
-            release_perms.set_mode(0o755);
-            fs::set_permissions(workspace_root.join("target/release/rcc"), release_perms).expect("chmod fake release binary");
+            let mut perms = fs::metadata(workspace_root.join("target/release/rcc"))
+                .expect("release metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(workspace_root.join("target/release/rcc"), perms)
+                .expect("chmod fake release binary");
         }
 
         let config = AppConfig {
@@ -848,22 +903,15 @@ mod tests {
         let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
         let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
 
-        match previous_home {
-            Some(value) => unsafe { env::set_var("HOME", value) },
-            None => unsafe { env::remove_var("HOME") },
-        }
-        match previous_shell {
-            Some(value) => unsafe { env::set_var("SHELL", value) },
-            None => unsafe { env::remove_var("SHELL") },
-        }
-        match previous_path {
-            Some(value) => unsafe { env::set_var("PATH", value) },
-            None => unsafe { env::remove_var("PATH") },
-        }
-
         assert!(result.is_ok(), "{result:?}");
-        assert!(prompter.output().contains("설치 스크립트를 지금 실행할까요?"));
-        assert!(prompter.output().contains("나중에 직접 실행하려면"));
+        assert!(
+            prompter.output().contains("설치 스크립트를 지금 실행할까요?"),
+            "installer prompt not found in: {}", prompter.output()
+        );
+        assert!(
+            prompter.output().contains("나중에 직접 실행하려면"),
+            "skip message not found in: {}", prompter.output()
+        );
     }
 
     #[test]
@@ -1017,6 +1065,10 @@ mod tests {
 
     #[tokio::test]
     async fn interactive_setup_surfaces_manual_required_slack_step_before_prompting() {
+        // collect_setup_prerequisites spawns tmux/claude subprocesses that inherit HOME and PATH;
+        // serialise with tests that mutate either variable.
+        let _guard = slack_env_lock();
+        let _hlock = crate::test_helpers::home_env_lock();
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
@@ -1050,7 +1102,10 @@ mod tests {
         .await
         .expect_err("missing values should stop after manual-required guidance");
 
-        assert!(error.to_string().contains("Slack app approval is still required"));
+        assert!(
+            error.to_string().contains("Slack app approval is still required"),
+            "unexpected error: {error}"
+        );
         assert!(error.to_string().contains("projectRoot already prepared"));
         assert!(error.to_string().contains("projectLabel already prepared: demo-project"));
         assert!(error.to_string().contains("channelId already prepared: C123"));
@@ -1388,12 +1443,8 @@ mod tests {
 
     #[test]
     fn env_overrides_json_values_for_setup_input() {
-        let previous_channel = env::var_os("RCC_SETUP_CHANNEL_ID");
-        let previous_config = env::var_os("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN");
-        unsafe {
-            env::set_var("RCC_SETUP_CHANNEL_ID", "CENV");
-            env::set_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN", "xoxa-env");
-        };
+        let _channel = EnvGuard::set("RCC_SETUP_CHANNEL_ID", "CENV");
+        let _config = EnvGuard::set("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN", "xoxa-env");
 
         let input = setup::apply_setup_env_overrides(setup::SetupInput {
             channel_id: Some("CJSON".into()),
@@ -1402,15 +1453,7 @@ mod tests {
 
         assert_eq!(input.channel_id.as_deref(), Some("CENV"));
         assert_eq!(input.slack_app_configuration_token.as_deref(), Some("xoxa-env"));
-
-        match previous_channel {
-            Some(value) => unsafe { env::set_var("RCC_SETUP_CHANNEL_ID", value) },
-            None => unsafe { env::remove_var("RCC_SETUP_CHANNEL_ID") },
-        }
-        match previous_config {
-            Some(value) => unsafe { env::set_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN", value) },
-            None => unsafe { env::remove_var("RCC_SETUP_SLACK_APP_CONFIGURATION_TOKEN") },
-        }
+        // EnvGuards restore RCC_SETUP_* env vars on drop.
     }
 
     #[tokio::test]
@@ -1456,6 +1499,7 @@ mod tests {
     #[tokio::test]
     async fn run_setup_returns_automation_first_error_for_missing_non_interactive_values() {
         let _guard = cwd_lock();
+        let _hlock = crate::test_helpers::home_env_lock();
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
@@ -1598,6 +1642,7 @@ mod tests {
     #[tokio::test]
     async fn run_setup_accepts_slack_artifact_file_in_non_interactive_mode() {
         let _guard = cwd_lock();
+        let _hlock = crate::test_helpers::home_env_lock();
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
@@ -1654,17 +1699,41 @@ mod tests {
     #[tokio::test]
     async fn execute_setup_accepts_pre_resolved_input_without_prompting() {
         let _guard = slack_env_lock();
-        let previous_bot = env::var_os("SLACK_BOT_TOKEN");
-        let previous_signing = env::var_os("SLACK_SIGNING_SECRET");
-        let previous_app = env::var_os("SLACK_APP_TOKEN");
-        let previous_user = env::var_os("SLACK_ALLOWED_USER_ID");
+        let _hlock = crate::test_helpers::home_env_lock();
+        // EnvGuard restores all env vars on drop, even if the test panics.
+        let _bot = EnvGuard::remove("SLACK_BOT_TOKEN");
+        let _signing = EnvGuard::remove("SLACK_SIGNING_SECRET");
+        let _app = EnvGuard::remove("SLACK_APP_TOKEN");
+        let _user = EnvGuard::remove("SLACK_ALLOWED_USER_ID");
 
         let temp_dir = tempdir().expect("create temp dir");
         let workspace_root = temp_dir.path();
+
+        // Pin HOME/SHELL to temp dir so execute_setup creates dirs there, not
+        // in a path injected by a concurrent test (e.g. "/Users/demo").
+        let _home = EnvGuard::set("HOME", workspace_root);
+        let _shell = EnvGuard::set("SHELL", "/bin/zsh");
+
         fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
         fs::write(workspace_root.join("slack/app-manifest.json"), "{}")
             .expect("write manifest");
         fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
+
+        // Fake tmux — isolates from system PATH so this test never races with
+        // recover_active_sessions_marks_failed_sessions (which zeroes PATH).
+        let bin_dir = workspace_root.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::write(bin_dir.join("tmux"), "#!/bin/sh\nexit 0\n").expect("write fake tmux");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(bin_dir.join("tmux")).expect("tmux perms").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(bin_dir.join("tmux"), perms).expect("chmod fake tmux");
+        }
+        // Prepend fake bin to real PATH so system tools (claude, cargo, etc.) stay reachable.
+        let system_path = env::var("PATH").unwrap_or_default();
+        let _path = EnvGuard::set("PATH", format!("{}:{}", bin_dir.display(), system_path));
 
         // Fake release binary — doctor passes, installer script is generated but not executed
         fs::create_dir_all(workspace_root.join("target/release")).expect("create release dir");
@@ -1706,45 +1775,24 @@ mod tests {
         let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
         let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
 
-        match previous_bot {
-            Some(value) => unsafe { env::set_var("SLACK_BOT_TOKEN", value) },
-            None => unsafe { env::remove_var("SLACK_BOT_TOKEN") },
-        }
-        match previous_signing {
-            Some(value) => unsafe { env::set_var("SLACK_SIGNING_SECRET", value) },
-            None => unsafe { env::remove_var("SLACK_SIGNING_SECRET") },
-        }
-        match previous_app {
-            Some(value) => unsafe { env::set_var("SLACK_APP_TOKEN", value) },
-            None => unsafe { env::remove_var("SLACK_APP_TOKEN") },
-        }
-        match previous_user {
-            Some(value) => unsafe { env::set_var("SLACK_ALLOWED_USER_ID", value) },
-            None => unsafe { env::remove_var("SLACK_ALLOWED_USER_ID") },
-        }
-
+        // EnvGuards drop here, restoring SLACK_* env vars automatically.
         assert!(result.is_ok(), "{result:?}");
-        assert!(fs::read_to_string(workspace_root.join(".env.local"))
-            .unwrap()
-            .contains("SLACK_BOT_TOKEN=xoxb-bot"));
+        assert!(
+            fs::read_to_string(workspace_root.join(".env.local"))
+                .expect("read .env.local")
+                .contains("SLACK_BOT_TOKEN=xoxb-bot"),
+            "SLACK_BOT_TOKEN not written to .env.local"
+        );
     }
 
     #[test]
     fn config_prefers_explicit_installed_asset_paths() {
-        let previous_state = env::var_os("RCC_STATE_DB_PATH");
-        let previous_projects = env::var_os("RCC_CHANNEL_PROJECTS_PATH");
-        let previous_root = env::var_os("RCC_PROJECT_ROOT");
-        let previous_settings = env::var_os("RCC_HOOK_SETTINGS_PATH");
-        let previous_events = env::var_os("RCC_HOOK_EVENTS_DIR");
-        let previous_env_file = env::var_os("RCC_ENV_FILE");
-        unsafe {
-            env::set_var("RCC_STATE_DB_PATH", "/opt/rcc/state.db");
-            env::set_var("RCC_CHANNEL_PROJECTS_PATH", "/opt/rcc/channel-projects.json");
-            env::set_var("RCC_PROJECT_ROOT", "/work/project");
-            env::set_var("RCC_HOOK_SETTINGS_PATH", "/opt/rcc/claude-stop-hooks.json");
-            env::set_var("RCC_HOOK_EVENTS_DIR", "/opt/rcc/hooks");
-            env::set_var("RCC_ENV_FILE", "/work/project/.env.local");
-        }
+        let _state = EnvGuard::set("RCC_STATE_DB_PATH", "/opt/rcc/state.db");
+        let _projects = EnvGuard::set("RCC_CHANNEL_PROJECTS_PATH", "/opt/rcc/channel-projects.json");
+        let _root = EnvGuard::set("RCC_PROJECT_ROOT", "/work/project");
+        let _settings = EnvGuard::set("RCC_HOOK_SETTINGS_PATH", "/opt/rcc/claude-stop-hooks.json");
+        let _events = EnvGuard::set("RCC_HOOK_EVENTS_DIR", "/opt/rcc/hooks");
+        let _env_file = EnvGuard::set("RCC_ENV_FILE", "/work/project/.env.local");
 
         let config = AppConfig::from_env();
 
@@ -1756,31 +1804,7 @@ mod tests {
         assert_eq!(config.runtime_hook_settings_path, std::path::PathBuf::from("/opt/rcc/claude-stop-hooks.json"));
         let env_file = find_env_file(std::path::Path::new("/work/project"));
         assert_eq!(env_file, Some(std::path::PathBuf::from("/work/project/.env.local")));
-
-        match previous_state {
-            Some(value) => unsafe { env::set_var("RCC_STATE_DB_PATH", value) },
-            None => unsafe { env::remove_var("RCC_STATE_DB_PATH") },
-        }
-        match previous_projects {
-            Some(value) => unsafe { env::set_var("RCC_CHANNEL_PROJECTS_PATH", value) },
-            None => unsafe { env::remove_var("RCC_CHANNEL_PROJECTS_PATH") },
-        }
-        match previous_root {
-            Some(value) => unsafe { env::set_var("RCC_PROJECT_ROOT", value) },
-            None => unsafe { env::remove_var("RCC_PROJECT_ROOT") },
-        }
-        match previous_settings {
-            Some(value) => unsafe { env::set_var("RCC_HOOK_SETTINGS_PATH", value) },
-            None => unsafe { env::remove_var("RCC_HOOK_SETTINGS_PATH") },
-        }
-        match previous_events {
-            Some(value) => unsafe { env::set_var("RCC_HOOK_EVENTS_DIR", value) },
-            None => unsafe { env::remove_var("RCC_HOOK_EVENTS_DIR") },
-        }
-        match previous_env_file {
-            Some(value) => unsafe { env::set_var("RCC_ENV_FILE", value) },
-            None => unsafe { env::remove_var("RCC_ENV_FILE") },
-        }
+        // EnvGuards drop here, restoring all RCC_* env vars automatically.
     }
 
     #[test]
@@ -1841,6 +1865,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_can_start_slack_session_and_persist_binding_and_state() {
+        // Serialise with recover_active_sessions_marks_failed which zeros PATH.
+        let _guard = slack_env_lock();
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
         let app = build_app(AppConfig {
@@ -1879,6 +1905,8 @@ mod tests {
 
     #[tokio::test]
     async fn recover_active_sessions_marks_failed_sessions_when_runtime_recovery_cannot_start() {
+        // PATH="" breaks tmux discovery; serialise with other PATH-sensitive tests.
+        let _guard = slack_env_lock();
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
         let app = build_app(AppConfig {
@@ -1898,13 +1926,9 @@ mod tests {
             .await
             .expect("save running state");
 
-        let previous_path = env::var_os("PATH");
-        unsafe { env::set_var("PATH", "") };
+        let _path = EnvGuard::set("PATH", "");
         let result = app.recover_active_sessions().await;
-        match previous_path {
-            Some(value) => unsafe { env::set_var("PATH", value) },
-            None => unsafe { env::remove_var("PATH") },
-        }
+        // EnvGuard restores PATH on drop, even if assertions below panic.
 
         assert!(result.is_ok());
         let persisted = app
@@ -1921,6 +1945,8 @@ mod tests {
 
     #[tokio::test]
     async fn app_recovers_running_sessions_into_runtime_pending_turns() {
+        // Serialise with recover_active_sessions_marks_failed which zeros PATH.
+        let _guard = slack_env_lock();
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
         let app = build_app(AppConfig {
@@ -1951,12 +1977,8 @@ mod tests {
     #[test]
     fn app_reads_slack_socket_mode_config_from_env() {
         let _guard = slack_env_lock();
-        let previous_bot = env::var_os("SLACK_BOT_TOKEN");
-        let previous_app = env::var_os("SLACK_APP_TOKEN");
-        unsafe {
-            env::set_var("SLACK_BOT_TOKEN", "xoxb-test");
-            env::set_var("SLACK_APP_TOKEN", "xapp-test");
-        }
+        let _bot = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-test");
+        let _app_token = EnvGuard::set("SLACK_APP_TOKEN", "xapp-test");
 
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
@@ -1981,15 +2003,7 @@ mod tests {
                 app_token: "xapp-test".to_string(),
             }
         );
-
-        match previous_bot {
-            Some(value) => unsafe { env::set_var("SLACK_BOT_TOKEN", value) },
-            None => unsafe { env::remove_var("SLACK_BOT_TOKEN") },
-        }
-        match previous_app {
-            Some(value) => unsafe { env::set_var("SLACK_APP_TOKEN", value) },
-            None => unsafe { env::remove_var("SLACK_APP_TOKEN") },
-        }
+        // EnvGuards drop here, restoring SLACK_BOT_TOKEN and SLACK_APP_TOKEN.
     }
 
     #[test]

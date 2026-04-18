@@ -232,7 +232,31 @@ pub fn status_service(locale: &Locale) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::path::PathBuf;
+
+    /// RAII guard that restores an environment variable on drop.
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     #[test]
     fn build_plist_contains_label_and_paths() {
@@ -264,48 +288,35 @@ mod tests {
 
     #[test]
     fn service_plist_path_uses_home_library_launch_agents() {
-        let previous = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", "/Users/demo") };
+        let _hlock = crate::test_helpers::home_env_lock();
+        let _home = EnvGuard::set("HOME", "/Users/demo");
 
         let path = service_plist_path().expect("plist path");
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
 
         assert_eq!(
             path,
             PathBuf::from("/Users/demo/Library/LaunchAgents/com.remote-claude-code.rcc.plist")
         );
+        // EnvGuard restores HOME on drop.
     }
 
     #[test]
     fn default_rcc_path_uses_home_local_bin() {
-        let previous = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", "/Users/demo") };
+        let _hlock = crate::test_helpers::home_env_lock();
+        let _home = EnvGuard::set("HOME", "/Users/demo");
 
         let path = default_rcc_path().expect("rcc path");
 
-        match previous {
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-
         assert_eq!(path, PathBuf::from("/Users/demo/.local/bin/rcc"));
+        // EnvGuard restores HOME on drop.
     }
 
     #[test]
     fn default_log_path_uses_share_directory() {
-        let previous = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", "/Users/demo") };
+        let _hlock = crate::test_helpers::home_env_lock();
+        let _home = EnvGuard::set("HOME", "/Users/demo");
 
         let path = default_log_path().expect("log path");
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
 
         assert_eq!(
             path,
