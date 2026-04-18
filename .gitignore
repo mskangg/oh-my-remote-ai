@@ -16,7 +16,6 @@
 *.swp
 .cache/
 .playwright-test/
-CLAUDE.md
 .omc/
 skills-lock.json
 .agents/
