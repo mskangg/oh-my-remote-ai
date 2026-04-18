@@ -108,12 +108,19 @@ rcc service uninstall  # 서비스 해제 + 바이너리 제거
 현재 공개 기준으로 가장 신뢰할 수 있는 설치 경로는 아래입니다.
 
 ```bash
-cargo run -p rcc -- setup
-cargo run -p rcc -- setup --merge-slack-artifact docs/slack-setup-artifact-patch.example.json --json
+# 1. artifact 템플릿 생성
+cargo run -p rcc -- setup --write-slack-artifact-template .local/slack-setup-artifact.json
+
+# 2. 값 채운 뒤 merge
+cargo run -p rcc -- setup --merge-slack-artifact <patch.json> --json
+
+# 3. 설치 (release 빌드 + 바이너리 설치 + 설정 기록 자동)
 cargo run -p rcc -- setup --from-slack-artifact .local/slack-setup-artifact.json --non-interactive
-cargo run -p rcc -- doctor
-cargo build --release -p rcc
-sh .local/install-rcc.sh
+
+# 4. 검증
+rcc doctor
+
+# 5. 서비스 등록
 rcc service install && rcc service start
 ```
 
