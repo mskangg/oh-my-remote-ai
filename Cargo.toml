@@ -16,6 +16,8 @@ edition = "2021"
 license = "MIT"
 version = "0.1.0"
 authors = ["mskangg"]
+repository = "https://github.com/mskangg/remote-claude-code"
+description = "Control your Claude Code sessions from Slack — anywhere, any device"
 
 [workspace.lints.rust]
 future-incompatible = "warn"

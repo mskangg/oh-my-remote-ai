@@ -189,6 +189,16 @@ rcc doctor
 - Hero export: [`docs/hero-export.md`](docs/hero-export.md)
 - 런치 카피 팩: [`docs/launch-copy.ko.md`](docs/launch-copy.ko.md)
 
+## Contributing
+
+버그 리포트, 기능 제안, PR 모두 환영합니다. 자세한 내용은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
+
+## License
+
+MIT © 2026 [mskangg](https://github.com/mskangg)
+
+See [LICENSE](LICENSE) for the full text.
+
 ## Roadmap
 
 - Slack-first public launch
