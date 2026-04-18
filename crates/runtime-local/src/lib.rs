@@ -226,8 +226,7 @@ pub fn pick_latest_progress_event(
 ) -> Option<HookRelayEvent> {
     let start_index = last_delivered_turn_id
         .and_then(|turn_id| events.iter().position(|event| event.turn_id == turn_id))
-        .map(|index| index + 1)
-        .unwrap_or(0);
+        .map_or(0, |index| index + 1);
 
     events[start_index..]
         .iter()
@@ -447,7 +446,7 @@ where
             .lock()
             .await
             .get_mut(&session_id)
-            .and_then(|turns| turns.pop_back())
+            .and_then(VecDeque::pop_back)
     }
 
     pub async fn register_project_root(&self, session_id: SessionId, project_root: String) {

@@ -423,31 +423,26 @@ fn should_forward_to_runtime(
         SessionMsg::ApprovalGranted | SessionMsg::ApprovalRejected => {
             matches!(current_state, SessionState::WaitingForApproval)
         }
-        SessionMsg::RuntimeProgress { .. } => false,
         SessionMsg::Interrupt => matches!(next_state, SessionState::Cancelling { .. }),
         SessionMsg::Terminate => !matches!(
             current_state,
             SessionState::Starting | SessionState::Completed
         ),
         SessionMsg::Recover => matches!(current_state, SessionState::Starting),
-        SessionMsg::RuntimeCompleted { .. } | SessionMsg::RuntimeFailed { .. } => false,
+        SessionMsg::RuntimeProgress { .. }
+        | SessionMsg::RuntimeCompleted { .. }
+        | SessionMsg::RuntimeFailed { .. } => false,
     }
 }
 
 pub fn reduce(current_state: SessionState, message: &SessionMsg) -> SessionState {
     match (current_state, message) {
         (SessionState::Starting, SessionMsg::Recover) => SessionState::Idle,
-        (SessionState::Starting, SessionMsg::UserCommand(_)) => {
-            SessionState::Running { active_turn: TurnId::new() }
-        }
-        (SessionState::Idle, SessionMsg::UserCommand(_)) => {
-            SessionState::Running { active_turn: TurnId::new() }
-        }
-        (SessionState::Running { .. }, SessionMsg::UserCommand(_)) => {
-            SessionState::Running { active_turn: TurnId::new() }
-        }
-        (state, SessionMsg::SendKey { .. }) => state,
-        (state, SessionMsg::RuntimeProgress { .. }) => state,
+        (
+            SessionState::Starting | SessionState::Idle | SessionState::Running { .. },
+            SessionMsg::UserCommand(_),
+        ) => SessionState::Running { active_turn: TurnId::new() },
+        (state, SessionMsg::SendKey { .. } | SessionMsg::RuntimeProgress { .. }) => state,
         (SessionState::Running { active_turn }, SessionMsg::Interrupt) => {
             SessionState::Cancelling { active_turn }
         }
