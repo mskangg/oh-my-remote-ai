@@ -410,12 +410,14 @@ mod tests {
 
     fn slack_env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock slack env")
+        let mutex = LOCK.get_or_init(|| Mutex::new(()));
+        mutex.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 
     fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock cwd")
+        let mutex = LOCK.get_or_init(|| Mutex::new(()));
+        mutex.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 
     #[test]
@@ -829,7 +831,7 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
-            locale: Default::default(),
+            locale: crate::locale::Locale::Ko,
         };
 
         let input = setup::SetupInput {
@@ -861,7 +863,7 @@ mod tests {
 
         assert!(result.is_ok(), "{result:?}");
         assert!(prompter.output().contains("설치 스크립트를 지금 실행할까요?"));
-        assert!(prompter.output().contains("Run this later with: sh"));
+        assert!(prompter.output().contains("나중에 직접 실행하려면"));
     }
 
     #[test]
@@ -1664,6 +1666,21 @@ mod tests {
             .expect("write manifest");
         fs::create_dir_all(workspace_root.join(".claude")).expect("create claude dir");
 
+        // Fake release binary — doctor passes, installer script is generated but not executed
+        fs::create_dir_all(workspace_root.join("target/release")).expect("create release dir");
+        fs::write(workspace_root.join("target/release/rcc"), "#!/bin/sh\nexit 0\n")
+            .expect("write fake release binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(workspace_root.join("target/release/rcc"))
+                .expect("release metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(workspace_root.join("target/release/rcc"), perms)
+                .expect("chmod fake release binary");
+        }
+
         let config = AppConfig {
             state_db_path: workspace_root.join(".local/state.db"),
             channel_project_store_path: workspace_root.join("data/channel-projects.json"),
@@ -1685,7 +1702,8 @@ mod tests {
             project_label: Some("demo-project".into()),
         };
 
-        let mut prompter = setup::FakePrompter::new(vec![]);
+        // "n" to skip running the installer script (only prompt after doctor passes)
+        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Prompt("n".into())]);
         let result = setup::execute_setup(&config, workspace_root, input, &mut prompter).await;
 
         match previous_bot {
