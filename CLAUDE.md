@@ -5,7 +5,7 @@
 Slack 안에서 Claude Code 세션을 안정적으로 원격 제어하는 제품을 출시한다.
 
 - "동작하는 코드"보다 "운영 가능한 코드"를 우선한다.
-- 구조 개선이 실사용 회귀를 만들면 실패다. TS보다 후진 UX가 나오면 그 변경은 미완성이다.
+- 구조 개선이 실사용 회귀를 만들면 실패다.
 
 ## 아키텍처
 
@@ -59,7 +59,7 @@ fatal: 부팅 실패, Socket Mode 연결 실패, 필수 env/config 누락
 
 ## 작업 기준
 
-우선순위: **사용자 체감 회귀** > 데이터 일관성 > 프로세스 생존성 > TS parity > 구조 개선
+우선순위: **사용자 체감 회귀** > 데이터 일관성 > 프로세스 생존성 > 구조 개선
 
 - 새 기능/회귀 수정은 테스트를 먼저 또는 함께 추가한다.
 - 회귀 테스트 필수: `/cc` 메뉴, 세션 생성/목록, thread relay, status message lifecycle, command palette, 세션 종료 후 stale action, orphan tmux cleanup
