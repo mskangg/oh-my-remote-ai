@@ -39,12 +39,13 @@ async fn main() {
             return;
         }
         CliCommand::Service(command) => {
+            let locale = &config.locale;
             let result = match command {
-                ServiceCommand::Install => service::install_service(),
-                ServiceCommand::Uninstall => service::uninstall_service(),
-                ServiceCommand::Start => service::start_service(),
-                ServiceCommand::Stop => service::stop_service(),
-                ServiceCommand::Status => service::status_service(),
+                ServiceCommand::Install => service::install_service(locale),
+                ServiceCommand::Uninstall => service::uninstall_service(locale),
+                ServiceCommand::Start => service::start_service(locale),
+                ServiceCommand::Stop => service::stop_service(locale),
+                ServiceCommand::Status => service::status_service(locale),
             };
             if let Err(error) = result {
                 eprintln!("rcc service error: {error}");

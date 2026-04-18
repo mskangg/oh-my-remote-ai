@@ -6,6 +6,8 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 
+use crate::locale::Locale;
+
 const SERVICE_LABEL: &str = "com.remote-claude-code.rcc";
 
 pub fn service_plist_path() -> Result<PathBuf> {
@@ -70,13 +72,10 @@ pub fn build_plist(rcc_path: &Path, log_path: &Path, path_env: &str) -> String {
     )
 }
 
-pub fn install_service() -> Result<()> {
+pub fn install_service(locale: &Locale) -> Result<()> {
     let rcc_path = default_rcc_path()?;
     if !rcc_path.exists() {
-        bail!(
-            "rcc binary not found at {}. Run setup first.",
-            rcc_path.display()
-        );
+        bail!("{}", locale.service_binary_not_found(&rcc_path));
     }
 
     let log_path = default_log_path()?;
@@ -105,13 +104,11 @@ pub fn install_service() -> Result<()> {
         bail!("launchctl load failed with status {status}");
     }
 
-    println!("Service installed and loaded: {SERVICE_LABEL}");
-    println!("Plist: {}", plist_path.display());
-    println!("Log:   {}", log_path.display());
+    println!("{}", locale.service_installed(SERVICE_LABEL, &plist_path, &log_path));
     Ok(())
 }
 
-pub fn uninstall_service() -> Result<()> {
+pub fn uninstall_service(locale: &Locale) -> Result<()> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -124,7 +121,7 @@ pub fn uninstall_service() -> Result<()> {
             .status();
         fs::remove_file(&plist_path)
             .with_context(|| format!("remove plist: {}", plist_path.display()))?;
-        println!("Removed: {}", plist_path.display());
+        println!("{}", locale.service_removed_path(&plist_path));
     }
 
     // 2. 바이너리 삭제
@@ -134,7 +131,7 @@ pub fn uninstall_service() -> Result<()> {
         if path.exists() {
             fs::remove_file(&path)
                 .with_context(|| format!("remove binary: {}", path.display()))?;
-            println!("Removed: {}", path.display());
+            println!("{}", locale.service_removed_path(&path));
         }
     }
 
@@ -146,7 +143,7 @@ pub fn uninstall_service() -> Result<()> {
     if share_dir.exists() {
         fs::remove_dir_all(&share_dir)
             .with_context(|| format!("remove share dir: {}", share_dir.display()))?;
-        println!("Removed: {}", share_dir.display());
+        println!("{}", locale.service_removed_path(&share_dir));
     }
 
     // 4. ~/.zshrc / ~/.bash_profile 등에서 PATH 줄 제거
@@ -167,7 +164,6 @@ pub fn uninstall_service() -> Result<()> {
             .filter(|line| line.trim() != path_line)
             .collect::<Vec<_>>()
             .join("\n");
-        // 파일 끝 개행 유지
         let updated = if content.ends_with('\n') {
             format!("{updated}\n")
         } else {
@@ -176,29 +172,29 @@ pub fn uninstall_service() -> Result<()> {
         if updated != content {
             fs::write(profile, &updated)
                 .with_context(|| format!("update profile: {}", profile.display()))?;
-            println!("Removed PATH entry from: {}", profile.display());
+            println!("{}", locale.service_removed_path_entry(profile));
         }
     }
 
-    println!("\nUninstall complete. Project config files (.env.local, data/) are kept.");
+    println!("{}", locale.service_uninstall_complete());
     Ok(())
 }
 
-pub fn start_service() -> Result<()> {
+pub fn start_service(locale: &Locale) -> Result<()> {
     let status = Command::new("launchctl")
         .args(["start", SERVICE_LABEL])
         .status()
         .context("run launchctl start")?;
 
     if !status.success() {
-        bail!("launchctl start failed with status {status}. Is the service installed? Run `rcc service install` first.");
+        bail!("launchctl start failed with status {status}. {}", locale.service_not_installed_hint());
     }
 
-    println!("Service started: {SERVICE_LABEL}");
+    println!("{}", locale.service_started(SERVICE_LABEL));
     Ok(())
 }
 
-pub fn stop_service() -> Result<()> {
+pub fn stop_service(locale: &Locale) -> Result<()> {
     let status = Command::new("launchctl")
         .args(["stop", SERVICE_LABEL])
         .status()
@@ -208,11 +204,11 @@ pub fn stop_service() -> Result<()> {
         bail!("launchctl stop failed with status {status}.");
     }
 
-    println!("Service stopped: {SERVICE_LABEL}");
+    println!("{}", locale.service_stopped(SERVICE_LABEL));
     Ok(())
 }
 
-pub fn status_service() -> Result<()> {
+pub fn status_service(locale: &Locale) -> Result<()> {
     let output = Command::new("launchctl")
         .args(["list", SERVICE_LABEL])
         .output()
@@ -224,9 +220,9 @@ pub fn status_service() -> Result<()> {
     } else {
         let plist_path = service_plist_path()?;
         if plist_path.exists() {
-            println!("Service is installed but not running: {SERVICE_LABEL}");
+            println!("{}", locale.service_installed_not_running(SERVICE_LABEL));
         } else {
-            println!("Service is not installed. Run `rcc service install` first.");
+            println!("{}", locale.service_not_installed_hint());
         }
     }
 

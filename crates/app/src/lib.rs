@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub runtime_launch_command: String,
     pub runtime_hook_events_directory: String,
     pub runtime_hook_settings_path: PathBuf,
+    pub locale: locale::Locale,
 }
 
 impl AppConfig {
@@ -55,6 +56,7 @@ impl AppConfig {
             runtime_launch_command,
             runtime_hook_events_directory,
             runtime_hook_settings_path,
+            locale: locale::Locale::from_env(),
         }
     }
 }
@@ -286,42 +288,42 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
     let slack_signing_secret = env_values.get("SLACK_SIGNING_SECRET");
     let slack_allowed_user_id = env_values.get("SLACK_ALLOWED_USER_ID");
 
+    let loc = &config.locale;
+    let env_file_str = env_file_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "not found".to_string());
+
     vec![
         DoctorCheck {
             name: "slack_bot_token",
             ok: slack_bot_token.is_some_and(|value| !value.trim().is_empty()),
-            detail: "SLACK_BOT_TOKEN is configured".to_string(),
+            detail: loc.doctor_token_configured("SLACK_BOT_TOKEN"),
         },
         DoctorCheck {
             name: "slack_app_token",
             ok: slack_app_token.is_some_and(|value| !value.trim().is_empty()),
-            detail: "SLACK_APP_TOKEN is configured".to_string(),
+            detail: loc.doctor_token_configured("SLACK_APP_TOKEN"),
         },
         DoctorCheck {
             name: "slack_signing_secret",
             ok: slack_signing_secret.is_some_and(|value| !value.trim().is_empty()),
-            detail: "SLACK_SIGNING_SECRET is configured".to_string(),
+            detail: loc.doctor_token_configured("SLACK_SIGNING_SECRET"),
         },
         DoctorCheck {
             name: "slack_allowed_user_id",
             ok: slack_allowed_user_id.is_some_and(|value| !value.trim().is_empty()),
-            detail: "SLACK_ALLOWED_USER_ID is configured".to_string(),
+            detail: loc.doctor_token_configured("SLACK_ALLOWED_USER_ID"),
         },
         DoctorCheck {
             name: "env_file",
             ok: env_file_path.is_some(),
-            detail: format!(
-                "env file path: {}",
-                env_file_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "not found".to_string())
-            ),
+            detail: loc.doctor_env_file(&env_file_str),
         },
         DoctorCheck {
             name: "tmux",
             ok: tmux_ok,
-            detail: "tmux is available on PATH".to_string(),
+            detail: loc.doctor_tmux_ok().to_string(),
         },
         DoctorCheck {
             name: "state_db_parent",
@@ -329,31 +331,29 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
                 .state_db_path
                 .parent()
                 .is_some_and(|parent| parent.exists() || fs::create_dir_all(parent).is_ok()),
-            detail: format!("state db path: {}", config.state_db_path.display()),
+            detail: loc.doctor_state_db(&config.state_db_path.display().to_string()),
         },
         DoctorCheck {
             name: "hook_events_parent",
             ok: fs::create_dir_all(&config.runtime_hook_events_directory).is_ok(),
-            detail: format!("hook events dir: {}", config.runtime_hook_events_directory),
+            detail: loc.doctor_hook_events_dir(&config.runtime_hook_events_directory),
         },
         DoctorCheck {
             name: "slack_manifest",
             ok: manifest_path.exists(),
-            detail: format!("manifest path: {}", manifest_path.display()),
+            detail: loc.doctor_manifest(&manifest_path.display().to_string()),
         },
         DoctorCheck {
             name: "channel_project_mapping",
             ok: config.channel_project_store_path.exists(),
-            detail: format!(
-                "channel project mapping: {}",
-                config.channel_project_store_path.display()
-            ),
+            detail: loc.doctor_channel_mapping(&config.channel_project_store_path.display().to_string()),
         },
     ]
 }
 
-pub mod setup;
+pub mod locale;
 pub mod service;
+pub mod setup;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceCommand {
@@ -764,6 +764,7 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let result = setup::run_setup(
@@ -828,6 +829,7 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let input = setup::SetupInput {
@@ -1025,9 +1027,13 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
-        let mut prompter = setup::FakePrompter::new(vec![setup::FakeAnswer::Confirm]);
+        let mut prompter = setup::FakePrompter::new(vec![
+            setup::FakeAnswer::Prompt("1".into()), // language selection: English
+            setup::FakeAnswer::Confirm,
+        ]);
         let error = setup::run_setup_with_prompter(
             &config,
             workspace_root,
@@ -1460,6 +1466,7 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let original_dir = env::current_dir().expect("cwd");
@@ -1620,6 +1627,7 @@ mod tests {
             runtime_launch_command: "claude".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let original_dir = env::current_dir().expect("cwd");
@@ -1663,6 +1671,7 @@ mod tests {
             runtime_launch_command: "claude --settings .claude/claude-stop-hooks.json --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: workspace_root.join(".local/hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude/claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let input = setup::SetupInput {
@@ -1768,6 +1777,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
 
@@ -1786,6 +1796,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
 
@@ -1803,6 +1814,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
 
@@ -1820,6 +1832,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
         let transport = app.slack_transport();
@@ -1857,6 +1870,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
         let session_id = core_model::SessionId::new();
@@ -1898,6 +1912,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
         let session_id = core_model::SessionId::new();
@@ -1934,6 +1949,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: "/tmp/hooks".to_string(),
             runtime_hook_settings_path: temp_dir.path().join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         })
         .expect("build app");
         let config = app
@@ -1983,6 +1999,7 @@ mod tests {
             runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
             runtime_hook_events_directory: workspace_root.join("hooks").display().to_string(),
             runtime_hook_settings_path: workspace_root.join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
         };
 
         let checks = run_doctor(&config, workspace_root);

@@ -1013,6 +1013,7 @@ pub async fn execute_setup(
             ("SLACK_SIGNING_SECRET", input.slack_signing_secret.as_deref().context("missing slack_signing_secret")?),
             ("SLACK_APP_TOKEN", input.slack_app_token.as_deref().context("missing slack_app_token")?),
             ("SLACK_ALLOWED_USER_ID", input.slack_allowed_user_id.as_deref().context("missing slack_allowed_user_id")?),
+            ("RCC_LOCALE", config.locale.code()),
         ],
     )?;
     let _ = from_path_override(&env_path);
@@ -1056,13 +1057,14 @@ pub async fn execute_setup(
             perms.set_mode(0o755);
             fs::set_permissions(&installer_script_path, perms)?;
         }
-        prompter.println(&format_setup_completion_message(&install_path, &profile_path, &installer_script_path));
-        let answer = prompter.prompt("설치 스크립트를 지금 실행할까요? [Y/n]")?;
+        let loc = &config.locale;
+        prompter.println(&loc.setup_completion_message(&install_path, &profile_path, &installer_script_path));
+        let answer = prompter.prompt(loc.setup_run_installer_prompt())?;
         if should_run_installer(&answer) {
             run_install_script(&installer_script_path)?;
-            prompter.println("Installer script executed successfully.");
+            prompter.println(loc.setup_installer_success());
         } else {
-            prompter.println(&format!("Run this later with: sh {}", installer_script_path.display()));
+            prompter.println(&loc.setup_installer_run_later(&installer_script_path));
         }
         Ok(())
     } else {
@@ -1123,11 +1125,26 @@ pub async fn run_setup_with_prompter(
         )));
     }
 
-    prompter.println("Remote Claude Code automation-first setup을 시작합니다.");
-    prompter.println("Slack app 생성은 manual-assisted 단계로 처리합니다.");
-    prompter.println("Manifest path: slack/app-manifest.json");
-    prompter.println("Slack link: https://api.slack.com/apps?new_app=1");
-    prompter.confirm("Slack app 생성 단계로 넘어가려면 Enter를 누르세요.")?;
+    let loc = crate::locale::Locale::default();
+    let lang_answer = prompter.prompt(loc.setup_choose_language())?;
+    let loc = crate::locale::Locale::from_str(&lang_answer);
+
+    match loc {
+        crate::locale::Locale::Ko => {
+            prompter.println("Remote Claude Code 설치를 시작합니다.");
+            prompter.println("Slack 앱 생성은 수동으로 진행합니다.");
+            prompter.println("Manifest 경로: slack/app-manifest.json");
+            prompter.println("Slack 링크: https://api.slack.com/apps?new_app=1");
+            prompter.confirm("Slack 앱 생성 단계로 넘어가려면 Enter를 누르세요.")?;
+        }
+        crate::locale::Locale::En => {
+            prompter.println("Starting Remote Claude Code setup.");
+            prompter.println("Slack app creation will be done via manual-assisted flow.");
+            prompter.println("Manifest path: slack/app-manifest.json");
+            prompter.println("Slack link: https://api.slack.com/apps?new_app=1");
+            prompter.confirm("Press Enter to proceed to the Slack app creation step.")?;
+        }
+    }
 
     let artifact_path = pending_slack_artifact_path(workspace_root);
     write_slack_setup_artifact_template(&artifact_path, &initial_input)?;
