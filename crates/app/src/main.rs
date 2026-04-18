@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf, sync::Arc};
 
-use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, AppConfig, CliCommand, ServiceCommand};
+use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, service, AppConfig, CliCommand, ServiceCommand};
 
-const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|start|stop|status>|--help|--version]";
+const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|uninstall|start|stop|status>|--help|--version]";
 use rcc::setup::run_setup;
 use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
@@ -39,13 +39,17 @@ async fn main() {
             return;
         }
         CliCommand::Service(command) => {
-            let message = match command {
-                ServiceCommand::Install => "rcc service install is not implemented yet. For now, run `rcc` directly after setup.",
-                ServiceCommand::Start => "rcc service start is not implemented yet. For now, run `rcc` directly after setup.",
-                ServiceCommand::Stop => "rcc service stop is not implemented yet.",
-                ServiceCommand::Status => "rcc service status is not implemented yet.",
+            let result = match command {
+                ServiceCommand::Install => service::install_service(),
+                ServiceCommand::Uninstall => service::uninstall_service(),
+                ServiceCommand::Start => service::start_service(),
+                ServiceCommand::Stop => service::stop_service(),
+                ServiceCommand::Status => service::status_service(),
             };
-            println!("{message}");
+            if let Err(error) = result {
+                eprintln!("rcc service error: {error}");
+                std::process::exit(1);
+            }
             return;
         }
         CliCommand::Help => {

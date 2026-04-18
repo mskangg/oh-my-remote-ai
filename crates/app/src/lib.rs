@@ -353,10 +353,12 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
 }
 
 pub mod setup;
+pub mod service;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceCommand {
     Install,
+    Uninstall,
     Start,
     Stop,
     Status,
@@ -388,6 +390,7 @@ pub fn parse_cli_command(args: &[String]) -> CliCommand {
 pub fn parse_service_command(args: &[String]) -> ServiceCommand {
     match args.get(2).map(|value| value.as_str()) {
         Some("install") => ServiceCommand::Install,
+        Some("uninstall") => ServiceCommand::Uninstall,
         Some("start") => ServiceCommand::Start,
         Some("stop") => ServiceCommand::Stop,
         Some("status") | None => ServiceCommand::Status,
@@ -425,6 +428,12 @@ mod tests {
     fn parse_cli_command_detects_service_start() {
         let args = vec!["rcc".to_string(), "service".to_string(), "start".to_string()];
         assert_eq!(parse_cli_command(&args), CliCommand::Service(ServiceCommand::Start));
+    }
+
+    #[test]
+    fn parse_cli_command_detects_service_uninstall() {
+        let args = vec!["rcc".to_string(), "service".to_string(), "uninstall".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Service(ServiceCommand::Uninstall));
     }
 
     #[test]
