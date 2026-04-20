@@ -196,6 +196,57 @@ pub fn build_channel_message_request(
 
 const SLACK_FINAL_REPLY_TEXT_LIMIT: usize = 2_500;
 
+/// Returns true if `line` is a CommonMark fenced code block delimiter.
+/// Handles ``` (3+ backticks) and ~~~ (3+ tildes), with optional indentation.
+fn is_fence_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let backticks = trimmed.chars().take_while(|&c| c == '`').count();
+    let tildes = trimmed.chars().take_while(|&c| c == '~').count();
+    backticks >= 3 || tildes >= 3
+}
+
+/// Returns the byte offset of the last open (unclosed) fence before `up_to`,
+/// or `None` if the prefix is not inside a code block.
+fn code_block_open_byte(text: &str, up_to: usize) -> Option<usize> {
+    let prefix = &text[..up_to];
+    let mut in_block = false;
+    let mut block_start: Option<usize> = None;
+    let mut byte_pos = 0;
+
+    for line in prefix.lines() {
+        if is_fence_line(line) {
+            if in_block {
+                in_block = false;
+                block_start = None;
+            } else {
+                in_block = true;
+                block_start = Some(byte_pos);
+            }
+        }
+        byte_pos += line.len() + 1; // +1 for the '\n'
+    }
+
+    if in_block { block_start } else { None }
+}
+
+/// Find the byte offset just after the closing fence, or `None` if unclosed.
+fn code_block_close_byte(text: &str) -> Option<usize> {
+    let mut in_block = false;
+    let mut byte_pos = 0;
+
+    for line in text.lines() {
+        let end = byte_pos + line.len() + 1;
+        if is_fence_line(line) {
+            if in_block {
+                return Some(end.min(text.len()));
+            }
+            in_block = true;
+        }
+        byte_pos = end;
+    }
+    None
+}
+
 fn split_for_slack_final_reply(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     // Track as &str cursor to avoid allocating on every iteration.
@@ -211,18 +262,39 @@ fn split_for_slack_final_reply(text: &str) -> Vec<String> {
             .unwrap_or(remaining.len());
         let slice = &remaining[..byte_limit];
 
-        let split_at = slice
+        let natural_split = slice
             .rfind("\n\n")
             .map(|i| i + 2)
             .or_else(|| slice.rfind('\n').map(|i| i + 1))
             .or_else(|| slice.rfind(' ').map(|i| i + 1))
             .unwrap_or(byte_limit);
 
-        let chunk = remaining[..split_at].trim();
+        // If the natural split point lands inside a fenced code block:
+        // - If the fence starts before it, back up to before the fence.
+        // - If the fence starts at 0 (whole limit is one code block), try to
+        //   extend to the closing fence — but cap the extension so we never send
+        //   a chunk that grossly exceeds the limit (Slack has block size caps).
+        const CODE_BLOCK_EXTEND_CAP: usize = 1_000;
+        let split_at = match code_block_open_byte(remaining, natural_split) {
+            Some(0) => match code_block_close_byte(remaining) {
+                Some(close) if close <= byte_limit + CODE_BLOCK_EXTEND_CAP => close,
+                // Block is longer than limit + cap — we cannot keep it intact.
+                // Split at the natural word/paragraph boundary inside the fence.
+                // The chunk will contain an unclosed fence, which is a known
+                // limitation for very large code samples (>3500 chars).
+                _ => natural_split,
+            },
+            Some(fence_start) => fence_start,
+            None => natural_split,
+        };
+
+        let chunk = remaining[..split_at].trim_end();
         if !chunk.is_empty() {
             chunks.push(chunk.to_string()); // single allocation per chunk
         }
-        remaining = remaining[split_at..].trim();
+        // Only skip newlines between chunks — preserve leading spaces/tabs that
+        // are significant in CommonMark (indented code, nested lists).
+        remaining = remaining[split_at..].trim_start_matches(['\n', '\r']);
     }
 
     if !remaining.is_empty() {
@@ -266,6 +338,90 @@ fn to_plain_fallback(text: &str) -> String {
         .join("\n")
         .trim()
         .to_string()
+}
+
+/// Convert Claude's CommonMark markdown to Slack mrkdwn format for Block Kit rendering.
+///
+/// Slack's `text` field has an inconsistent mrkdwn parser; Block Kit section blocks
+/// with explicit `type: "mrkdwn"` are reliable. This function converts Claude output
+/// into that format.
+pub fn claude_md_to_slack_mrkdwn(text: &str) -> String {
+    const HEADING_PREFIXES: &[&str] = &["### ", "## ", "# "];
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_block = false;
+
+    for line in text.lines() {
+        // Preserve code blocks verbatim — don't alter content inside them.
+        if in_code_block {
+            result.push_str(line);
+            result.push('\n');
+            if line.trim_start().starts_with("```") {
+                in_code_block = false;
+            }
+            continue;
+        }
+        if line.trim_start().starts_with("```") {
+            in_code_block = true;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        let trimmed = line.trim_start();
+
+        // Headings → *bold*
+        if let Some(rest) = HEADING_PREFIXES.iter().find_map(|p| trimmed.strip_prefix(p)) {
+            result.push('*');
+            result.push_str(rest.trim());
+            result.push('*');
+            result.push('\n');
+            continue;
+        }
+
+        // Horizontal rules → empty line
+        if matches!(trimmed, "---" | "***" | "___") {
+            result.push('\n');
+            continue;
+        }
+
+        // Star list items → bullet (avoids Slack parser confusion with bold *)
+        if let Some(rest) = trimmed.strip_prefix("* ") {
+            result.push_str("• ");
+            result.push_str(&bold_to_slack_mrkdwn(rest));
+            result.push('\n');
+            continue;
+        }
+
+        result.push_str(&bold_to_slack_mrkdwn(line));
+        result.push('\n');
+    }
+
+    result.trim_end().to_string()
+}
+
+/// Replace `**bold**` with `*bold*` for Slack mrkdwn.
+/// Only converts complete pairs; unmatched `**` (e.g. `2 ** 8`) is preserved.
+fn bold_to_slack_mrkdwn(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while let Some(open) = remaining.find("**") {
+        out.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 2..];
+        if let Some(close) = after_open.find("**") {
+            // Complete pair found — convert.
+            out.push('*');
+            out.push_str(&after_open[..close]);
+            out.push('*');
+            remaining = &after_open[close + 2..];
+        } else {
+            // No closing ** — preserve literally.
+            out.push_str("**");
+            remaining = after_open;
+        }
+    }
+    out.push_str(remaining);
+    out
 }
 
 fn format_claude_text_for_slack(text: &str) -> Vec<SlackFormattedMessage> {
@@ -1348,8 +1504,23 @@ impl SlackWebApiPublisher {
         let text = text.into();
         let mut last_posted = None;
 
-        for message in format_claude_text_for_slack(&text) {
-            let posted = self.post_thread_message(target, &message.text).await?;
+        for chunk in split_for_slack_final_reply(&text) {
+            // SlackMarkdownBlock serializes as { "type": "markdown" } which Slack
+            // renders as CommonMark — the same format Claude produces. Passing the
+            // original text avoids the need for mrkdwn conversion and correctly
+            // handles **bold**, headings, code blocks, and inline code spans.
+            let fallback = to_plain_fallback(&chunk);
+            let posted = self
+                .post_thread_message_with_blocks(
+                    target,
+                    &fallback,
+                    vec![SlackMarkdownBlock {
+                        block_id: None,
+                        text: chunk,
+                    }
+                    .into()],
+                )
+                .await?;
             last_posted = Some(posted);
         }
 
@@ -2897,6 +3068,50 @@ mod tests {
         let text = to_plain_fallback("# Summary\n\n**Bold**\n\n`code`");
 
         assert_eq!(text, "Summary\n\nBold\n\ncode");
+    }
+
+    // ── claude_md_to_slack_mrkdwn tests ────────────────────────────────────────
+
+    #[test]
+    fn mrkdwn_converts_bold() {
+        assert_eq!(claude_md_to_slack_mrkdwn("**bold** text"), "*bold* text");
+    }
+
+    #[test]
+    fn mrkdwn_converts_heading1_to_bold() {
+        assert_eq!(claude_md_to_slack_mrkdwn("# 제목"), "*제목*");
+    }
+
+    #[test]
+    fn mrkdwn_converts_all_heading_levels() {
+        assert_eq!(claude_md_to_slack_mrkdwn("## 제목2"), "*제목2*");
+        assert_eq!(claude_md_to_slack_mrkdwn("### 제목3"), "*제목3*");
+    }
+
+    #[test]
+    fn mrkdwn_converts_star_list_to_bullet() {
+        assert_eq!(claude_md_to_slack_mrkdwn("* 항목"), "• 항목");
+    }
+
+    #[test]
+    fn mrkdwn_strips_horizontal_rule() {
+        assert_eq!(claude_md_to_slack_mrkdwn("---"), "");
+    }
+
+    #[test]
+    fn mrkdwn_preserves_code_block() {
+        let input = "```rust\nfn main() {}\n```";
+        assert_eq!(claude_md_to_slack_mrkdwn(input), input);
+    }
+
+    #[test]
+    fn mrkdwn_preserves_inline_code() {
+        assert_eq!(claude_md_to_slack_mrkdwn("`code`"), "`code`");
+    }
+
+    #[test]
+    fn mrkdwn_leaves_plain_text_unchanged() {
+        assert_eq!(claude_md_to_slack_mrkdwn("일반 텍스트입니다."), "일반 텍스트입니다.");
     }
 
     #[test]
