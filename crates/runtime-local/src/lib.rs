@@ -119,6 +119,14 @@ fn extract_claude_session_id(
 }
 
 fn build_project_session_log_path(project_root: &str, claude_session_id: &str) -> anyhow::Result<PathBuf> {
+    // Validate session ID to prevent path traversal via a crafted hook event file.
+    anyhow::ensure!(
+        !claude_session_id.is_empty()
+            && claude_session_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "invalid claude_session_id: {claude_session_id}"
+    );
     let home = env::var("HOME")
         .map(PathBuf::from)
         .map_err(|_| anyhow::anyhow!("HOME environment variable is not set"))?;
@@ -873,6 +881,18 @@ where
                 self.tmux.exec(&["send-keys", "-t", &target, "Enter"]).await?;
             }
             SessionMsg::SendKey { key } => {
+                // Allowlist named tmux keys accepted from Slack users. This prevents
+                // allowlisted users from sending arbitrary tmux key sequences.
+                const ALLOWED_KEYS: &[&str] = &[
+                    "Escape", "Enter", "Tab", "BSpace",
+                    "C-c", "C-u", "C-l", "C-z",
+                    "Up", "Down", "Left", "Right",
+                    "PageUp", "PageDown", "Home", "End",
+                ];
+                anyhow::ensure!(
+                    ALLOWED_KEYS.contains(&key.as_str()),
+                    "disallowed tmux key: {key}"
+                );
                 self.tmux.exec(&["send-keys", "-t", &target, key]).await?;
             }
             SessionMsg::Interrupt => {
@@ -926,6 +946,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::OnceLock;
 
     use core_model::{TurnId, UserCommand};
     use core_service::SessionMessageSink;
@@ -934,6 +955,38 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
+
+    /// Serialises tests that mutate the `HOME` environment variable to prevent
+    /// data races on the process environment in the multi-threaded tokio runtime.
+    fn home_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// RAII guard that restores an environment variable on drop (even on panic).
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     #[derive(Default, Clone)]
     struct RecordingTmux {
@@ -1734,8 +1787,8 @@ mod tests {
         let home_dir = temp_dir.path().join("home");
         let project_root = "/tmp/project";
         let claude_session_id = "claude-session-1";
-        let original_home = env::var("HOME").ok();
-        unsafe { env::set_var("HOME", &home_dir); }
+        let _hlock = home_env_lock();
+        let _home = EnvGuard::set("HOME", &home_dir);
         let transcript_path = build_project_session_log_path(project_root, claude_session_id).expect("transcript path");
         fs::create_dir_all(transcript_path.parent().expect("transcript parent"))
             .await
@@ -1787,10 +1840,6 @@ mod tests {
         .expect("write hook events");
 
         let result = runtime.poll_hook_events_once(session_id).await;
-
-        if let Some(value) = original_home {
-            unsafe { env::set_var("HOME", value); }
-        }
 
         result.expect("poll hook events");
 

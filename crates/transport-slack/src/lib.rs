@@ -925,10 +925,9 @@ pub fn parse_allowed_user_ids(env_value: &str) -> Vec<String> {
 }
 
 pub fn is_allowed_user(user_id: &str, allowed: &[String]) -> bool {
-    if allowed.is_empty() {
-        return true;
-    }
-    allowed.iter().any(|id| id == user_id)
+    // Fail-closed: an empty allowlist denies everyone. Callers must ensure a
+    // non-empty allowlist is configured (enforced at startup by from_env()).
+    !allowed.is_empty() && allowed.iter().any(|id| id == user_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2197,7 +2196,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &[],
+            &["U123".to_string()],
             r#"{
               "envelope_id":"env-2",
               "type":"interactive",
@@ -2230,7 +2229,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &[],
+            &["U123".to_string()],
             r#"{
               "envelope_id":"env-3",
               "type":"interactive",
@@ -2265,7 +2264,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
-            &[],
+            &["U123".to_string()],
             r#"{
               "envelope_id":"env-4",
               "type":"interactive",
@@ -2945,8 +2944,10 @@ mod tests {
     }
 
     #[test]
-    fn is_allowed_user_returns_true_when_list_is_empty() {
-        assert!(is_allowed_user("U123", &[]));
+    fn is_allowed_user_denies_all_when_list_is_empty() {
+        // Fail-closed: empty allowlist must deny everyone.
+        assert!(!is_allowed_user("U123", &[]));
+        assert!(!is_allowed_user("", &[]));
     }
 
     #[test]
