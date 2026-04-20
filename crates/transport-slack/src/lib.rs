@@ -3033,4 +3033,150 @@ mod tests {
         );
     }
 
+    // ── Scenario: 허용된 사용자의 슬래시 커맨드 ──────────────────────────────────
+    //
+    // Scenario: 허용된 사용자가 /cc start를 보내면 세션이 시작된다
+    //   Given 허용 목록에 U123이 등록되어 있다
+    //   When U123이 /cc start 슬래시 커맨드를 보낸다
+    //   Then 해당 채널에 세션 시작이 요청된다
+    #[tokio::test]
+    async fn 허용된_사용자의_슬래시_커맨드는_세션을_시작한다() {
+        // Given
+        let orchestrator = Arc::new(RecordingOrchestrator::default());
+        let allowed = vec!["U123".to_string()];
+
+        // When
+        let ack = handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-allowed-1",
+              "type":"slash_commands",
+              "accepts_response_payload":true,
+              "payload":{
+                "command":"/cc",
+                "channel_id":"C123",
+                "user_id":"U123",
+                "text":"start"
+              }
+            }"#,
+        )
+        .await
+        .expect("handle slash command");
+
+        tokio::task::yield_now().await;
+
+        // Then
+        let ack = ack.expect("slash command should be acked");
+        let payload: Value = serde_json::from_str(&ack).expect("parse ack");
+        assert_eq!(payload["envelope_id"], "env-allowed-1");
+        assert_eq!(
+            orchestrator.started_channels.lock().await.as_slice(),
+            &["C123".to_string()],
+            "허용된 사용자의 커맨드는 세션을 시작해야 함"
+        );
+    }
+
+    // ── Scenario: 다중 허용 사용자 ───────────────────────────────────────────────
+    //
+    // Scenario: 여러 허용 사용자 중 하나가 커맨드를 보내도 세션이 시작된다
+    //   Given 허용 목록에 U123, U456, U789가 등록되어 있다
+    //   When U456이 /cc start 슬래시 커맨드를 보낸다
+    //   Then 세션 시작이 요청된다
+    //   And U789가 /cc start를 보내도 세션이 시작된다
+    #[tokio::test]
+    async fn 다중_허용_사용자_중_누구나_세션을_시작할_수_있다() {
+        // Given
+        let orchestrator = Arc::new(RecordingOrchestrator::default());
+        let allowed = vec!["U123".to_string(), "U456".to_string(), "U789".to_string()];
+
+        // When - 두 번째 허용 사용자
+        handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-multi-1",
+              "type":"slash_commands",
+              "accepts_response_payload":true,
+              "payload":{
+                "command":"/cc",
+                "channel_id":"C456",
+                "user_id":"U456",
+                "text":"start"
+              }
+            }"#,
+        )
+        .await
+        .expect("handle U456 slash command");
+        tokio::task::yield_now().await;
+
+        // When - 세 번째 허용 사용자
+        handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-multi-2",
+              "type":"slash_commands",
+              "accepts_response_payload":true,
+              "payload":{
+                "command":"/cc",
+                "channel_id":"C789",
+                "user_id":"U789",
+                "text":"start"
+              }
+            }"#,
+        )
+        .await
+        .expect("handle U789 slash command");
+        tokio::task::yield_now().await;
+
+        // Then - 두 채널 모두 세션 시작
+        let started = orchestrator.started_channels.lock().await;
+        assert!(started.contains(&"C456".to_string()), "U456의 채널 세션이 시작되어야 함");
+        assert!(started.contains(&"C789".to_string()), "U789의 채널 세션이 시작되어야 함");
+    }
+
+    // ── Scenario: 허용된 사용자의 interactive action ─────────────────────────────
+    //
+    // Scenario: 허용된 사용자가 세션 시작 버튼을 누르면 세션이 시작된다
+    //   Given 허용 목록에 U123이 등록되어 있다
+    //   When U123이 claude_session_new 인터랙션을 보낸다
+    //   Then 해당 채널에 세션 시작이 요청된다
+    #[tokio::test]
+    async fn 허용된_사용자의_interactive_action은_처리된다() {
+        // Given
+        let orchestrator = Arc::new(RecordingOrchestrator::default());
+        let allowed = vec!["U123".to_string()];
+
+        // When
+        let ack = handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-allowed-2",
+              "type":"interactive",
+              "payload":{
+                "type":"block_actions",
+                "user":{"id":"U123"},
+                "channel":{"id":"C123"},
+                "container":{"channel_id":"C123","message_ts":"1740.900"},
+                "actions":[{"action_id":"claude_session_new","value":"claude.session.new"}]
+              }
+            }"#,
+        )
+        .await
+        .expect("handle interactive request");
+        tokio::task::yield_now().await;
+
+        // Then
+        let ack = ack.expect("interactive request should be acked");
+        let payload: Value = serde_json::from_str(&ack).expect("parse ack");
+        assert_eq!(payload["envelope_id"], "env-allowed-2");
+        assert_eq!(
+            orchestrator.started_channels.lock().await.as_slice(),
+            &["C123".to_string()],
+            "허용된 사용자의 인터랙션은 세션을 시작해야 함"
+        );
+    }
+
 }
