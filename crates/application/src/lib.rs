@@ -923,6 +923,7 @@ mod tests {
                 channel_id: "C777".to_string(),
                 thread_ts: "1740.100".to_string(),
                 text: "ㅎㅇ".to_string(),
+                user_id: "U123".to_string(),
             })
             .await
             .expect("handle reply");
@@ -1569,6 +1570,7 @@ mod tests {
                 channel_id: "C_DEAD".to_string(),
                 thread_ts: "9999.300".to_string(),
                 text: "안녕하세요".to_string(),
+                user_id: "U123".to_string(),
             })
             .await;
 

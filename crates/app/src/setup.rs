@@ -67,6 +67,7 @@ fn is_missing_setup_value(value: Option<&str>) -> bool {
             | "your-signing-secret"
             | "xapp-your-app-token"
             | "U12345678"
+            | "U12345678,U87654321"
             | "C12345678"
             | "/absolute/path/to/your/project"
             | "my-project"
@@ -509,7 +510,7 @@ pub fn write_slack_setup_artifact_template(path: &Path, input: &SetupInput) -> R
             allowed_user_id: input
                 .slack_allowed_user_id
                 .clone()
-                .or_else(|| Some("U12345678".to_string())),
+                .or_else(|| Some("U12345678,U87654321".to_string())),
             app_configuration_token: input.slack_app_configuration_token.clone(),
             app_id: None,
             oauth_authorize_url: None,
@@ -989,7 +990,8 @@ pub async fn resolve_setup_input(
         input.slack_app_token = Some(prompter.prompt_secret("SLACK_APP_TOKEN")?);
     }
     if input.slack_allowed_user_id.is_none() {
-        input.slack_allowed_user_id = Some(prompter.prompt("SLACK_ALLOWED_USER_ID")?);
+        input.slack_allowed_user_id =
+            Some(prompter.prompt("SLACK_ALLOWED_USER_IDs (comma-separated, e.g. U123,U456)")?);
     }
     if input.project_root.is_none() {
         input.project_root = Some(prompter.prompt("projectRoot")?);

@@ -2,7 +2,7 @@
   "slack_bot_token": "xoxb-your-bot-token",
   "slack_signing_secret": "your-signing-secret",
   "slack_app_token": "xapp-your-app-token",
-  "slack_allowed_user_id": "U12345678",
+  "slack_allowed_user_id": "U12345678,U87654321",
   "channel_id": "C12345678",
   "project_root": "/absolute/path/to/your/project",
   "project_label": "my-project"

@@ -221,6 +221,13 @@ pub fn stop_service(locale: &Locale) -> Result<()> {
     Ok(())
 }
 
+pub fn restart_service(locale: &Locale) -> Result<()> {
+    if let Err(error) = stop_service(locale) {
+        eprintln!("rcc: stop before restart failed (service may already be stopped): {error}");
+    }
+    start_service(locale)
+}
+
 pub fn status_service(locale: &Locale) -> Result<()> {
     let output = Command::new("launchctl")
         .args(["list", SERVICE_LABEL])

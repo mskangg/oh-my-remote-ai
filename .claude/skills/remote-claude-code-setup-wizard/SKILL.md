@@ -54,16 +54,17 @@ manifest가 필요하면 아래 중 하나를 제공한다.
 순서:
 1. `Signing Secret`
    - 위치: `Basic Information` → `Signing Secret`
-2. `Bot User OAuth Token`
-   - 형식: `xoxb-...`
-   - 위치: `OAuth & Permissions` → 설치 후 확인
-3. `App-Level Token`
+2. `App-Level Token`
    - 형식: `xapp-...`
    - `connections:write` 권한으로 생성
-   - 위치: `Basic Information` → `App-Level Tokens`
-4. `allowedUserId`
-   - 형식: `U...`
+   - 위치: `Basic Information` → `App-Level Tokens` (같은 화면에서 연속으로 수집)
+3. `Bot User OAuth Token`
+   - 형식: `xoxb-...`
+   - 위치: `OAuth & Permissions` → 앱 설치 후 확인 (별도 단계)
+4. `allowedUserId` (여러 명 가능, 쉼표 구분)
+   - 형식: `U...` 또는 `U123,U456,U789`
    - 위치: 프로필 → 세 점 → `Copy member ID`
+   - 봇을 사용할 사람이 여러 명이면 각자의 member ID를 쉼표로 구분해서 받는다
 5. `projectRoot`
    - 형식: 절대 경로
    - 먼저 어떤 로컬 프로젝트를 Slack 채널과 연결할지 정한다
@@ -137,19 +138,22 @@ rcc service start
 > 먼저 `Signing Secret`를 보내주세요.
 > 위치: `Basic Information` → `Signing Secret`
 
-### Step 7. Bot token
-> 좋아요. 다음은 `Bot User OAuth Token`입니다.
-> 먼저 `OAuth & Permissions`로 가서 **`Install to 'your-workspace'`** 를 누르세요.
+### Step 7. App-level token
+> 같은 `Basic Information` 화면에서 바로 `App-Level Token`도 만들어주세요.
+> `App-Level Tokens` 섹션에서 `connections:write` 권한으로 토큰을 생성하고 `xapp-...` 값을 보내주세요.
+
+### Step 8. Bot token
+> 이제 앱을 워크스페이스에 설치해야 해요.
+> `OAuth & Permissions`로 가서 **`Install to 'your-workspace'`** 를 누르세요.
 > 설치가 끝나면 같은 화면의 **OAuth Tokens** 섹션에 `Bot User OAuth Token`(`xoxb-...`)이 생성됩니다.
 > 그 값을 보내주세요.
 
-### Step 8. App-level token
-> 다음은 `App-Level Token`입니다.
-> `connections:write` 권한으로 만든 `xapp-...` 값을 보내주세요.
-
-### Step 9. Allowed user ID
-> 다음은 `allowedUserId`입니다.
+### Step 9. Allowed user IDs
+> 다음은 `allowedUserId`입니다. 봇을 사용할 수 있는 사람을 지정해요.
 > Slack에서 `프로필 → 세 점 → Copy member ID`로 확인한 `U...` 값을 보내주세요.
+> 여러 명이라면 쉼표로 구분해서 보내주세요. 예: `U123,U456,U789`
+>
+> 나중에 사람을 추가할 때는 `.env.local`의 `SLACK_ALLOWED_USER_ID` 값에 쉼표로 이어 붙이고 `rcc service restart`하면 돼요.
 
 ### Step 10. Project root
 > 이제 어떤 로컬 프로젝트를 연결할지 정할게요.
@@ -188,6 +192,7 @@ rcc service start
 > rcc service install
 > rcc service start
 > ```
+
 
 ## Common mistakes
 - 토큰 여러 개를 한 번에 달라고 하기

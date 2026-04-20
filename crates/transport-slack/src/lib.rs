@@ -32,6 +32,7 @@ pub struct SlackThreadReply {
     pub channel_id: String,
     pub thread_ts: String,
     pub text: String,
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +110,9 @@ pub fn parse_thread_reply(envelope: SlackEnvelope) -> Option<SlackThreadReply> {
     let channel_id = envelope.channel?;
     let thread_ts = envelope.thread_ts?;
     let text = envelope.text?;
+    let user_id = envelope.user?;
 
-    if envelope.bot_id.is_some() || envelope.user.is_none() {
+    if envelope.bot_id.is_some() {
         return None;
     }
 
@@ -124,6 +126,7 @@ pub fn parse_thread_reply(envelope: SlackEnvelope) -> Option<SlackThreadReply> {
         channel_id,
         thread_ts,
         text,
+        user_id,
     })
 }
 
@@ -135,8 +138,9 @@ pub fn parse_push_thread_reply(event: &SlackPushEventCallback) -> Option<SlackTh
     let channel_id = message.origin.channel.as_ref()?.to_string();
     let thread_ts = message.origin.thread_ts.as_ref()?.to_string();
     let text = message.content.as_ref()?.text.clone()?;
+    let user_id = message.sender.user.as_ref()?.to_string();
 
-    if message.sender.bot_id.is_some() || message.sender.user.is_none() {
+    if message.sender.bot_id.is_some() {
         return None;
     }
 
@@ -150,6 +154,7 @@ pub fn parse_push_thread_reply(event: &SlackPushEventCallback) -> Option<SlackTh
         channel_id,
         thread_ts,
         text,
+        user_id,
     })
 }
 
@@ -915,17 +920,41 @@ where
     }
 }
 
+pub fn parse_allowed_user_ids(env_value: &str) -> Vec<String> {
+    env_value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+pub fn is_allowed_user(user_id: &str, allowed: &[String]) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    allowed.iter().any(|id| id == user_id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlackSocketModeConfig {
     pub bot_token: String,
     pub app_token: String,
+    pub allowed_user_ids: Vec<String>,
 }
 
 impl SlackSocketModeConfig {
     pub fn from_env() -> Result<Self> {
+        let allowed_user_ids = std::env::var("SLACK_ALLOWED_USER_ID")
+            .map(|v| parse_allowed_user_ids(&v))
+            .unwrap_or_default();
+        if allowed_user_ids.is_empty() {
+            anyhow::bail!("SLACK_ALLOWED_USER_ID is not set or empty — set at least one allowed Slack user ID");
+        }
         Ok(Self {
             bot_token: std::env::var("SLACK_BOT_TOKEN")?,
             app_token: std::env::var("SLACK_APP_TOKEN")?,
+            allowed_user_ids,
         })
     }
 }
@@ -944,12 +973,19 @@ struct SlackBlockActionPayload {
     thread_ts: Option<String>,
     action_id: String,
     value: Option<String>,
+    user_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawInteractiveUser {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawInteractivePayload {
     #[serde(rename = "type")]
     kind: String,
+    user: Option<RawInteractiveUser>,
     channel: Option<RawInteractiveChannel>,
     message: Option<RawInteractiveMessage>,
     container: Option<RawInteractiveContainer>,
@@ -1122,6 +1158,7 @@ fn parse_interactive_action(payload: Option<Value>) -> Result<Option<SlackBlockA
         thread_ts,
         action_id: action.action_id,
         value: action.value,
+        user_id: payload.user.map(|u| u.id),
     }))
 }
 
@@ -1366,7 +1403,7 @@ pub async fn serve_socket_mode(
     config: SlackSocketModeConfig,
 ) -> Result<()> {
     let client = Arc::new(SlackClient::new(build_slack_https_connector()));
-    let app_token: SlackApiToken = SlackApiToken::new(config.app_token.into());
+    let app_token: SlackApiToken = SlackApiToken::new(config.app_token.clone().into());
     let session = client.open_session(&app_token);
 
     tracing::info!("socket mode token registered");
@@ -1442,7 +1479,7 @@ pub async fn serve_socket_mode(
         while let Some(message) = stream.next().await {
             match message {
                 Ok(Message::Text(body)) => {
-                    match handle_socket_mode_text(Arc::clone(&orchestrator), body.as_ref()).await {
+                    match handle_socket_mode_text(Arc::clone(&orchestrator), &config.allowed_user_ids, body.as_ref()).await {
                         Ok(Some(reply)) => {
                             if let Err(error) = stream.send(Message::Text(reply.into())).await {
                                 tracing::warn!(error = %error, "failed to send ack; reconnecting");
@@ -1482,6 +1519,7 @@ pub async fn serve_socket_mode(
 
 async fn handle_socket_mode_text(
     orchestrator: Arc<dyn SlackSessionOrchestrator>,
+    allowed_user_ids: &[String],
     raw: &str,
 ) -> Result<Option<String>> {
     match parse_socket_mode_request(raw) {
@@ -1507,6 +1545,14 @@ async fn handle_socket_mode_text(
                 text = ?payload.text,
                 "received slash command"
             );
+
+            if !is_allowed_user(&payload.user_id, allowed_user_ids) {
+                tracing::warn!(user_id = payload.user_id, "slash command from non-allowed user");
+                return Ok(Some(build_socket_mode_ack(
+                    &envelope_id,
+                    Some(json!({ "text": "You are not authorized to use this command." })),
+                )?));
+            }
 
             let command_text = payload.text.as_deref().map(str::trim).unwrap_or("");
             let ack_payload = if command_text.is_empty() {
@@ -1536,7 +1582,9 @@ async fn handle_socket_mode_text(
             payload,
         }) => {
             if let Some(reply) = parse_push_thread_reply(&payload) {
-                if let Err(error) = orchestrator.handle_session_reply(reply).await {
+                if !is_allowed_user(&reply.user_id, allowed_user_ids) {
+                    tracing::warn!(user_id = reply.user_id, "thread reply from non-allowed user ignored");
+                } else if let Err(error) = orchestrator.handle_session_reply(reply).await {
                     tracing::warn!(error = %error, "failed to handle Slack thread reply");
                 }
             }
@@ -1553,8 +1601,15 @@ async fn handle_socket_mode_text(
                     channel_id = action.channel_id,
                     thread_ts = ?action.thread_ts,
                     value = ?action.value,
+                    user_id = ?action.user_id,
                     "received interactive action"
                 );
+
+                if !is_allowed_user(action.user_id.as_deref().unwrap_or(""), allowed_user_ids) {
+                    tracing::warn!(user_id = ?action.user_id, "interactive action from non-allowed user");
+                    return Ok(Some(build_socket_mode_ack(&envelope_id, None)?));
+                }
+
                 match action.action_id.as_str() {
                     "claude_session_new" => {
                         let channel_id = action.channel_id;
@@ -2027,6 +2082,7 @@ mod tests {
                 channel_id: "C123".to_string(),
                 thread_ts: "1740.100".to_string(),
                 text: "continue".to_string(),
+                user_id: "U123".to_string(),
             })
         );
     }
@@ -2129,6 +2185,7 @@ mod tests {
                     thread_ts: Some("1740.900".to_string()),
                     action_id: "claude_session_new".to_string(),
                     value: Some("claude.session.new".to_string()),
+                    user_id: None,
                 }),
             }
         );
@@ -2140,6 +2197,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
+            &[],
             r#"{
               "envelope_id":"env-2",
               "type":"interactive",
@@ -2171,6 +2229,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
+            &[],
             r#"{
               "envelope_id":"env-3",
               "type":"interactive",
@@ -2204,6 +2263,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
+            &[],
             r#"{
               "envelope_id":"env-4",
               "type":"interactive",
@@ -2237,6 +2297,7 @@ mod tests {
 
         let ack = handle_socket_mode_text(
             orchestrator.clone(),
+            &[],
             r#"{
               "envelope_id":"env-5",
               "type":"interactive",
@@ -2363,6 +2424,7 @@ mod tests {
                 channel_id: "C123".to_string(),
                 thread_ts: "1740.100".to_string(),
                 text: "continue".to_string(),
+                user_id: "U123".to_string(),
             })
         );
     }
@@ -2449,6 +2511,7 @@ mod tests {
                 channel_id: "C123".to_string(),
                 thread_ts: "1740.100".to_string(),
                 text: "continue".to_string(),
+                user_id: "U123".to_string(),
             })
             .await
             .expect("route thread reply");
@@ -2468,6 +2531,7 @@ mod tests {
                 channel_id: "C123".to_string(),
                 thread_ts: "1740.100".to_string(),
                 text: "continue".to_string(),
+                user_id: "U123".to_string(),
             })
             .await
             .expect_err("missing binding should fail");
@@ -2816,6 +2880,153 @@ mod tests {
         let text = to_plain_fallback("# Summary\n\n**Bold**\n\n`code`");
 
         assert_eq!(text, "Summary\n\nBold\n\ncode");
+    }
+
+    #[test]
+    fn thread_reply_carries_sender_user_id() {
+        let parsed = parse_thread_reply(SlackEnvelope {
+            channel: Some("C123".to_string()),
+            text: Some("hello".to_string()),
+            thread_ts: Some("1740.100".to_string()),
+            user: Some("U456".to_string()),
+            bot_id: None,
+            subtype: None,
+        });
+        assert_eq!(parsed.unwrap().user_id, "U456");
+    }
+
+    #[test]
+    fn thread_reply_from_non_allowed_user_is_blocked_by_is_allowed_user() {
+        let reply = parse_thread_reply(SlackEnvelope {
+            channel: Some("C123".to_string()),
+            text: Some("hello".to_string()),
+            thread_ts: Some("1740.100".to_string()),
+            user: Some("U123".to_string()),
+            bot_id: None,
+            subtype: None,
+        })
+        .unwrap();
+
+        let allowed = vec!["U999".to_string()];
+        assert!(!is_allowed_user(&reply.user_id, &allowed));
+
+        let allowed_with_user = vec!["U123".to_string()];
+        assert!(is_allowed_user(&reply.user_id, &allowed_with_user));
+    }
+
+    #[test]
+    fn parse_allowed_user_ids_returns_empty_for_blank_value() {
+        assert!(parse_allowed_user_ids("").is_empty());
+        assert!(parse_allowed_user_ids("  , , ").is_empty());
+    }
+
+    #[test]
+    fn parse_allowed_user_ids_parses_single_id() {
+        assert_eq!(parse_allowed_user_ids("U123"), vec!["U123".to_string()]);
+    }
+
+    #[test]
+    fn parse_allowed_user_ids_parses_multiple_ids() {
+        assert_eq!(
+            parse_allowed_user_ids("U123,U456,U789"),
+            vec!["U123".to_string(), "U456".to_string(), "U789".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_allowed_user_ids_trims_whitespace_and_skips_empty() {
+        assert_eq!(
+            parse_allowed_user_ids(" U123 , U456 , , U789 "),
+            vec!["U123".to_string(), "U456".to_string(), "U789".to_string()]
+        );
+    }
+
+    #[test]
+    fn is_allowed_user_returns_true_when_list_is_empty() {
+        assert!(is_allowed_user("U123", &[]));
+    }
+
+    #[test]
+    fn is_allowed_user_matches_exact_id() {
+        let ids = vec!["U123".to_string(), "U456".to_string()];
+        assert!(is_allowed_user("U123", &ids));
+        assert!(is_allowed_user("U456", &ids));
+        assert!(!is_allowed_user("U999", &ids));
+    }
+
+    #[tokio::test]
+    async fn slash_command_from_non_allowed_user_returns_unauthorized_ack() {
+        let orchestrator = Arc::new(RecordingOrchestrator::default());
+        let allowed = vec!["U999".to_string()];
+
+        let ack = handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-1",
+              "type":"slash_commands",
+              "accepts_response_payload":true,
+              "payload":{
+                "command":"/cc",
+                "channel_id":"C123",
+                "user_id":"U123",
+                "text":"start"
+              }
+            }"#,
+        )
+        .await
+        .expect("handle slash command");
+
+        tokio::task::yield_now().await;
+
+        let ack = ack.expect("slash command should be acked");
+        let payload: Value = serde_json::from_str(&ack).expect("parse ack");
+        assert_eq!(payload["envelope_id"], "env-1");
+        assert!(
+            payload["payload"]["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("not authorized"),
+            "ack payload should contain 'not authorized'"
+        );
+        assert!(
+            orchestrator.started_channels.lock().await.is_empty(),
+            "no session should be started for non-allowed user"
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_action_from_non_allowed_user_is_acked_but_not_processed() {
+        let orchestrator = Arc::new(RecordingOrchestrator::default());
+        let allowed = vec!["U999".to_string()];
+
+        let ack = handle_socket_mode_text(
+            orchestrator.clone(),
+            &allowed,
+            r#"{
+              "envelope_id":"env-2",
+              "type":"interactive",
+              "payload":{
+                "type":"block_actions",
+                "user":{"id":"U123"},
+                "channel":{"id":"C123"},
+                "container":{"channel_id":"C123","message_ts":"1740.900"},
+                "actions":[{"action_id":"claude_session_new","value":"claude.session.new"}]
+              }
+            }"#,
+        )
+        .await
+        .expect("handle interactive request");
+
+        tokio::task::yield_now().await;
+
+        let ack = ack.expect("interactive request should be acked");
+        let payload: Value = serde_json::from_str(&ack).expect("parse ack");
+        assert_eq!(payload["envelope_id"], "env-2");
+        assert!(
+            orchestrator.started_channels.lock().await.is_empty(),
+            "no session should be started for non-allowed user"
+        );
     }
 
 }

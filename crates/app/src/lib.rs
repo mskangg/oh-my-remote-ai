@@ -9,7 +9,7 @@ use runtime_local::{LocalRuntime, LocalRuntimeConfig, SystemTmuxClient};
 use serde::{Deserialize, Serialize};
 use session_store::SqliteSessionRepository;
 use transport_slack::{
-    SlackProject, SlackProjectLocator, SlackSocketModeConfig, SlackTransport, SlackWebApiPublisher,
+    parse_allowed_user_ids, SlackProject, SlackProjectLocator, SlackSocketModeConfig, SlackTransport, SlackWebApiPublisher,
 };
 
 pub struct AppConfig {
@@ -312,7 +312,7 @@ pub fn run_doctor(config: &AppConfig, workspace_root: &Path) -> Vec<DoctorCheck>
         },
         DoctorCheck {
             name: "slack_allowed_user_id",
-            ok: slack_allowed_user_id.is_some_and(|value| !value.trim().is_empty()),
+            ok: slack_allowed_user_id.is_some_and(|value| !parse_allowed_user_ids(value).is_empty()),
             detail: loc.doctor_token_configured("SLACK_ALLOWED_USER_ID"),
         },
         DoctorCheck {
@@ -380,6 +380,7 @@ pub enum ServiceCommand {
     Install,
     Uninstall,
     Start,
+    Restart,
     Stop,
     Status,
 }
@@ -412,6 +413,7 @@ pub fn parse_service_command(args: &[String]) -> ServiceCommand {
         Some("install") => ServiceCommand::Install,
         Some("uninstall") => ServiceCommand::Uninstall,
         Some("start") => ServiceCommand::Start,
+        Some("restart") => ServiceCommand::Restart,
         Some("stop") => ServiceCommand::Stop,
         Some("status") | None => ServiceCommand::Status,
         Some(_) => ServiceCommand::Status,
@@ -510,6 +512,18 @@ mod tests {
     fn parse_service_command_defaults_to_status() {
         let args = vec!["rcc".to_string(), "service".to_string()];
         assert_eq!(parse_service_command(&args), ServiceCommand::Status);
+    }
+
+    #[test]
+    fn parse_service_command_detects_restart() {
+        let args = vec!["rcc".to_string(), "service".to_string(), "restart".to_string()];
+        assert_eq!(parse_service_command(&args), ServiceCommand::Restart);
+    }
+
+    #[test]
+    fn parse_cli_command_detects_service_restart() {
+        let args = vec!["rcc".to_string(), "service".to_string(), "restart".to_string()];
+        assert_eq!(parse_cli_command(&args), CliCommand::Service(ServiceCommand::Restart));
     }
 
     #[test]
@@ -1984,6 +1998,7 @@ mod tests {
         let _guard = slack_env_lock();
         let _bot = EnvGuard::set("SLACK_BOT_TOKEN", "xoxb-test");
         let _app_token = EnvGuard::set("SLACK_APP_TOKEN", "xapp-test");
+        let _allowed = EnvGuard::set("SLACK_ALLOWED_USER_ID", "U123,U456");
 
         let temp_dir = tempdir().expect("create temp dir");
         let database_path = temp_dir.path().join("nested").join("state.db");
@@ -2006,6 +2021,7 @@ mod tests {
             SlackSocketModeConfig {
                 bot_token: "xoxb-test".to_string(),
                 app_token: "xapp-test".to_string(),
+                allowed_user_ids: vec!["U123".to_string(), "U456".to_string()],
             }
         );
         // EnvGuards drop here, restoring SLACK_BOT_TOKEN and SLACK_APP_TOKEN.
@@ -2046,6 +2062,37 @@ mod tests {
         assert!(checks.iter().any(|check| check.name == "state_db_parent" && check.ok));
         assert!(checks.iter().any(|check| check.name == "hook_events_parent" && check.ok));
         assert!(checks.iter().any(|check| check.name == "channel_project_mapping" && check.ok));
+    }
+
+    #[test]
+    fn doctor_reports_slack_allowed_user_id_fail_for_blank_only_value() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let workspace_root = temp_dir.path();
+        fs::create_dir_all(workspace_root.join("slack")).expect("create slack dir");
+        fs::write(workspace_root.join("slack").join("app-manifest.json"), "{}").expect("write manifest");
+        fs::write(
+            workspace_root.join(".env.local"),
+            "SLACK_BOT_TOKEN=xoxb-test\nSLACK_APP_TOKEN=xapp-test\nSLACK_SIGNING_SECRET=signing-test\nSLACK_ALLOWED_USER_ID= , ,\n",
+        )
+        .expect("write env");
+        fs::create_dir_all(workspace_root.join("data")).expect("create data dir");
+        fs::write(workspace_root.join("data").join("channel-projects.json"), "[]").expect("write mapping");
+        let config = AppConfig {
+            state_db_path: workspace_root.join("state").join("state.db"),
+            channel_project_store_path: workspace_root.join("data").join("channel-projects.json"),
+            runtime_working_directory: "/tmp/project".to_string(),
+            runtime_launch_command: "claude --dangerously-skip-permissions".to_string(),
+            runtime_hook_events_directory: workspace_root.join("hooks").display().to_string(),
+            runtime_hook_settings_path: workspace_root.join(".claude").join("claude-stop-hooks.json"),
+            locale: Default::default(),
+        };
+
+        let checks = run_doctor(&config, workspace_root);
+
+        assert!(
+            checks.iter().any(|check| check.name == "slack_allowed_user_id" && !check.ok),
+            "blank-only SLACK_ALLOWED_USER_ID should fail doctor check"
+        );
     }
 
     #[test]

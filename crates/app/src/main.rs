@@ -4,7 +4,7 @@ use tracing_subscriber::EnvFilter;
 
 use rcc::{build_app, find_env_file, parse_cli_command, resolve_workspace_root, run_doctor, service, AppConfig, CliCommand, ServiceCommand};
 
-const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|uninstall|start|stop|status>|--help|--version]";
+const HELP_TEXT: &str = "Usage: rcc [setup|doctor|service <install|uninstall|start|stop|restart|status>|--help|--version]";
 use rcc::setup::run_setup;
 use transport_slack::{serve_socket_mode, SlackSessionOrchestrator};
 
@@ -53,6 +53,7 @@ async fn main() {
                 ServiceCommand::Install => service::install_service(locale),
                 ServiceCommand::Uninstall => service::uninstall_service(locale),
                 ServiceCommand::Start => service::start_service(locale),
+                ServiceCommand::Restart => service::restart_service(locale),
                 ServiceCommand::Stop => service::stop_service(locale),
                 ServiceCommand::Status => service::status_service(locale),
             };
