@@ -107,26 +107,21 @@ pub struct SlackEnvelope {
 }
 
 pub fn parse_thread_reply(envelope: SlackEnvelope) -> Option<SlackThreadReply> {
-    let channel_id = envelope.channel?;
-    let thread_ts = envelope.thread_ts?;
-    let text = envelope.text?;
-    let user_id = envelope.user?;
-
     if envelope.bot_id.is_some() {
         return None;
     }
 
-    if let Some(subtype) = envelope.subtype {
+    if let Some(ref subtype) = envelope.subtype {
         if subtype != "thread_broadcast" {
             return None;
         }
     }
 
     Some(SlackThreadReply {
-        channel_id,
-        thread_ts,
-        text,
-        user_id,
+        channel_id: envelope.channel?,
+        thread_ts: envelope.thread_ts?,
+        text: envelope.text?,
+        user_id: envelope.user?,
     })
 }
 
@@ -1513,6 +1508,7 @@ pub async fn serve_socket_mode(
         }
 
         tracing::info!("reconnecting socket mode websocket");
+        reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY);
         sleep(reconnect_delay).await;
     }
 }
@@ -1605,8 +1601,12 @@ async fn handle_socket_mode_text(
                     "received interactive action"
                 );
 
-                if !is_allowed_user(action.user_id.as_deref().unwrap_or(""), allowed_user_ids) {
-                    tracing::warn!(user_id = ?action.user_id, "interactive action from non-allowed user");
+                let Some(action_user_id) = action.user_id.as_deref() else {
+                    tracing::warn!(action_id = action.action_id, "interactive action has no user_id; ignoring");
+                    return Ok(Some(build_socket_mode_ack(&envelope_id, None)?));
+                };
+                if !is_allowed_user(action_user_id, allowed_user_ids) {
+                    tracing::warn!(user_id = action_user_id, "interactive action from non-allowed user");
                     return Ok(Some(build_socket_mode_ack(&envelope_id, None)?));
                 }
 
@@ -2203,6 +2203,7 @@ mod tests {
               "type":"interactive",
               "payload":{
                 "type":"block_actions",
+                "user":{"id":"U123"},
                 "channel":{"id":"C123"},
                 "container":{"channel_id":"C123","message_ts":"1740.900"},
                 "actions":[{"action_id":"claude_session_new","value":"claude.session.new"}]
@@ -2235,6 +2236,7 @@ mod tests {
               "type":"interactive",
               "payload":{
                 "type":"block_actions",
+                "user":{"id":"U123"},
                 "channel":{"id":"C123"},
                 "container":{"channel_id":"C123","message_ts":"1740.901"},
                 "actions":[{"action_id":"claude_session_list","value":"claude.session.list"}]
@@ -2269,6 +2271,7 @@ mod tests {
               "type":"interactive",
               "payload":{
                 "type":"block_actions",
+                "user":{"id":"U123"},
                 "channel":{"id":"C123"},
                 "container":{"channel_id":"C123","message_ts":"1740.902"},
                 "actions":[{"action_id":"claude_command_palette_open","value":"open"}]
