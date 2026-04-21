@@ -870,8 +870,8 @@ mod tests {
         assert!(script.contains("cd \"/Users/demo/work/project\""));
         assert!(script.contains("export RCC_PROJECT_ROOT=\"/Users/demo/work/project\""));
         assert!(script.contains("export RCC_ENV_FILE=\"/Users/demo/work/project/.env.local\""));
-        assert!(script.contains("export RCC_HOOK_SETTINGS_PATH=\"/Users/demo/.local/share/remote-claude-code/claude-stop-hooks.json\""));
-        assert!(script.contains("export RCC_HOOK_SCRIPT_PATH=\"/Users/demo/.local/share/remote-claude-code/hooks/claude-stop-hook.mjs\""));
+        assert!(script.contains("export RCC_HOOK_SETTINGS_PATH=\"/Users/demo/.local/share/oh-my-remote-ai/claude-stop-hooks.json\""));
+        assert!(script.contains("export RCC_HOOK_SCRIPT_PATH=\"/Users/demo/.local/share/oh-my-remote-ai/hooks/claude-stop-hook.mjs\""));
         assert!(script.contains("exec \"/Users/demo/.local/bin/rcc.bin\" \"$@\""));
     }
 

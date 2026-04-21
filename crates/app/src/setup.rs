@@ -847,7 +847,7 @@ pub fn build_shell_install_script(
         .and_then(|path| path.parent())
         .map(|path| path.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    let asset_root = install_root.join("share").join("remote-claude-code");
+    let asset_root = install_root.join("share").join("oh-my-remote-ai");
     let hook_script_target = asset_root.join("hooks").join("claude-stop-hook.mjs");
     let hook_store_target = asset_root.join("hooks").join("hook-event-store.mjs");
     let hook_settings_target = asset_root.join("claude-stop-hooks.json");
@@ -1134,7 +1134,7 @@ pub async fn execute_setup(
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             install_root
                 .join("share")
-                .join("remote-claude-code")
+                .join("oh-my-remote-ai")
                 .join("hooks")
                 .join("claude-stop-hook.mjs")
                 .display()
