@@ -2,7 +2,7 @@
 
 ## 목적
 
-Slack 안에서 Claude Code 세션을 안정적으로 원격 제어하는 제품을 출시한다.
+oh-my-remote-ai — Slack에서 Claude Code, Codex, Gemini 등 AI 에이전트 세션을 안정적으로 원격 제어하는 제품을 출시한다.
 
 - "동작하는 코드"보다 "운영 가능한 코드"를 우선한다.
 - 구조 개선이 실사용 회귀를 만들면 실패다.
