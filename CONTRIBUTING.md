@@ -1,4 +1,4 @@
-# Contributing to Remote Claude Code
+# Contributing to oh-my-remote-ai
 
 Thank you for your interest in contributing!
 

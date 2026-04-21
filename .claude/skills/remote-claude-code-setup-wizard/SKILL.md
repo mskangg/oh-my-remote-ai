@@ -1,12 +1,12 @@
 ---
 name: remote-claude-code-setup-wizard
-description: Use when setting up Remote Claude Code, connecting Slack, creating the Slack app from a manifest or manifest API, collecting setup values one at a time, resuming setup from the workspace artifact, running doctor verification, or guiding the user through this repository's installation wizard.
+description: Use when setting up oh-my-remote-ai, connecting Slack, creating the Slack app from a manifest or manifest API, collecting setup values one at a time, resuming setup from the workspace artifact, running doctor verification, or guiding the user through this repository's installation wizard.
 ---
 
-# Remote Claude Code Setup Wizard
+# oh-my-remote-ai Setup Wizard
 
 ## Overview
-이 스킬은 Remote Claude Code 설치를 **plugin 기반 semi-automatic ping-pong wizard**로 진행한다. Claude가 가능한 건 자동 처리하고, Slack 콘솔처럼 사람 손이 필요한 단계는 정확한 링크, 붙여넣을 내용, 메뉴 위치, 복사할 값, 다음 행동을 한 단계씩 안내한다.
+이 스킬은 oh-my-remote-ai 설치를 **plugin 기반 semi-automatic ping-pong wizard**로 진행한다. Claude가 가능한 건 자동 처리하고, Slack 콘솔처럼 사람 손이 필요한 단계는 정확한 링크, 붙여넣을 내용, 메뉴 위치, 복사할 값, 다음 행동을 한 단계씩 안내한다.
 
 ## When to Use
 - 사용자가 `remote-claude-code 셋업해줘`, `슬랙 연동 설치해줘`, `딸깍 셋업 진행해줘` 같이 설치를 요청할 때
@@ -111,7 +111,7 @@ rcc service start
 ## Final Step Sequence
 
 ### Step 0. Start
-> Remote Claude Code 셋업을 시작할게요. 자동으로 할 수 있는 건 처리하고, Slack 콘솔에서 필요한 단계만 짧고 정확하게 안내할게요.
+> oh-my-remote-ai 셋업을 시작할게요. 자동으로 할 수 있는 건 처리하고, Slack 콘솔에서 필요한 단계만 짧고 정확하게 안내할게요.
 
 ### Step 1. Local checks
 > 먼저 로컬 환경과 기존 설정을 확인할게요.
@@ -165,7 +165,7 @@ rcc service start
 
 ### Step 12. Channel ID
 > 이제 이 프로젝트를 대표할 Slack 채널을 준비할 차례예요. 채널 하나가 프로젝트 하나를 대표합니다.
-> 이 프로젝트용 채널을 새로 만들거나 기존 채널을 고른 뒤, 반드시 **`/invite @Remote Claude Code`** 로 방금 만든 bot user를 먼저 초대해 주세요.
+> 이 프로젝트용 채널을 새로 만들거나 기존 채널을 고른 뒤, 반드시 **`/invite @oh-my-remote-ai`** 로 방금 만든 bot user를 먼저 초대해 주세요.
 > 그 다음 채널 세부정보를 열고 맨 아래의 `Copy channel ID`를 눌러 `C...` 값을 보내주세요.
 > 초대 전에는 `/cc` 루트 메시지는 보여도 thread reply가 세션으로 전달되지 않을 수 있습니다.
 

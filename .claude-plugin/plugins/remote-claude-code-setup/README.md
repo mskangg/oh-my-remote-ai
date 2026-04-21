@@ -1,6 +1,6 @@
 # remote-claude-code-setup
 
-Guided setup wizard plugin for Remote Claude Code.
+Guided setup wizard plugin for oh-my-remote-ai.
 
 ## What it provides
 

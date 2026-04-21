@@ -15,7 +15,7 @@
 - 설치 후 `doctor`로 바로 검증 가능
 
 ## Launch post
-방금 `Remote Claude Code`를 공개했습니다.
+방금 `oh-my-remote-ai`를 공개했습니다.
 Slack에서 `/cc`를 열고, 제가 원래 작업하던 Claude Code 세션을 그대로 이어서 부릴 수 있습니다.
 설치는 가볍게, 검증은 `doctor`로 바로.
 

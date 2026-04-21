@@ -1,12 +1,12 @@
 ---
 name: remote-claude-code-setup-wizard
-description: Use when setting up Remote Claude Code, connecting Slack, creating the Slack app from a manifest or manifest API, collecting setup values one at a time, resuming setup from the workspace artifact, running doctor verification, or guiding the user through this repository's installation wizard.
+description: Use when setting up oh-my-remote-ai, connecting Slack, creating the Slack app from a manifest or manifest API, collecting setup values one at a time, resuming setup from the workspace artifact, running doctor verification, or guiding the user through this repository's installation wizard.
 ---
 
-# Remote Claude Code Setup Wizard
+# oh-my-remote-ai Setup Wizard
 
 ## Overview
-이 스킬은 Remote Claude Code 설치를 **plugin 기반 semi-automatic ping-pong wizard**로 진행한다. Claude가 가능한 건 자동 처리하고, Slack 콘솔처럼 사람 손이 필요한 단계는 정확한 링크, 붙여넣을 내용, 메뉴 위치, 복사할 값, 다음 행동을 한 단계씩 안내한다.
+이 스킬은 oh-my-remote-ai 설치를 **plugin 기반 semi-automatic ping-pong wizard**로 진행한다. Claude가 가능한 건 자동 처리하고, Slack 콘솔처럼 사람 손이 필요한 단계는 정확한 링크, 붙여넣을 내용, 메뉴 위치, 복사할 값, 다음 행동을 한 단계씩 안내한다.
 
 ## When to Use
 - 사용자가 `remote-claude-code 셋업해줘`, `슬랙 연동 설치해줘`, `딸깍 셋업 진행해줘` 같이 설치를 요청할 때

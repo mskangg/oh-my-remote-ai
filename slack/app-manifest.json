@@ -4,13 +4,13 @@
     "minor_version": 1
   },
   "display_information": {
-    "name": "Remote Claude Code",
-    "description": "Run Claude Code in your real environment and continue it from anywhere.",
+    "name": "oh-my-remote-ai",
+    "description": "Control Claude Code, Codex, and Gemini from Slack. Your AI agents, anywhere.",
     "background_color": "#1f2937"
   },
   "features": {
     "bot_user": {
-      "display_name": "Remote Claude Code",
+      "display_name": "oh-my-remote-ai",
       "always_online": true
     },
     "slash_commands": [
