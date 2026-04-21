@@ -9,7 +9,7 @@ description: Use when setting up oh-my-remote-ai, connecting Slack, creating the
 이 스킬은 oh-my-remote-ai 설치를 **plugin 기반 semi-automatic ping-pong wizard**로 진행한다. Claude가 가능한 건 자동 처리하고, Slack 콘솔처럼 사람 손이 필요한 단계는 정확한 링크, 붙여넣을 내용, 메뉴 위치, 복사할 값, 다음 행동을 한 단계씩 안내한다.
 
 ## When to Use
-- 사용자가 `remote-claude-code 셋업해줘`, `슬랙 연동 설치해줘`, `딸깍 셋업 진행해줘` 같이 설치를 요청할 때
+- 사용자가 `oh-my-remote-ai 셋업해줘`, `슬랙 연동 설치해줘`, `딸깍 셋업 진행해줘` 같이 설치를 요청할 때
 - setup을 처음 시작할 때
 - setup을 중간에서 이어서 진행할 때
 - artifact 기반으로 재개하거나 `doctor`까지 검증할 때
@@ -191,7 +191,16 @@ rcc service start
 > rcc
 > rcc service install
 > rcc service start
+> rcc service restart   # 설정 변경 후 재시작
 > ```
+>
+> Slack에서 사용할 수 있는 슬래시 커맨드:
+> - `/cc` — Claude Code 세션 시작
+> - `/cx` — Codex 세션 시작 (codex CLI 필요)
+> - `/gm` — Gemini 세션 시작 (gemini CLI 필요)
+>
+> setup 시 codex/gemini가 감지되면 훅 설정 파일이 자동 설치됩니다.
+> 이미 `~/.codex/config.toml` 또는 `~/.gemini/settings.json`이 있으면 건드리지 않습니다.
 
 
 ## Common mistakes
