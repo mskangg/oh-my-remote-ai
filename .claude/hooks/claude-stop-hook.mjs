@@ -220,7 +220,9 @@ export const runStopHookFromStdin = async () => {
             transcriptPath: payload.transcript_path ?? null,
             hookEventFilePath,
         });
-        text = stableEntry?.text ?? '';
+        // Prefer transcript-derived text (Claude Code); fall back to
+        // last_assistant_message for agents that provide it directly (Codex).
+        text = stableEntry?.text ?? payload.last_assistant_message?.trim() ?? '';
         stopTurnKey = stableEntry?.uuid ?? null;
     }
     if (text.length === 0) {

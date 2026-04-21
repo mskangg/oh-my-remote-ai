@@ -1288,10 +1288,10 @@ pub fn is_agent_installed(binary: &str) -> bool {
 }
 
 pub fn build_codex_hook_config(hook_script_path: &str) -> String {
-    // Only register the turn-completion hook (stop). Tool hooks use names the
-    // shared relay cannot parse, so they are intentionally omitted here.
+    // Codex hooks are configured via hooks.json (not config.toml).
+    // Only register Stop; tool-use hooks use names the shared relay cannot parse.
     format!(
-        "[features]\ncodex_hooks = true\n\n[hooks]\nstop = [\"node \\\"{hook_script_path}\\\"\"]\n"
+        "{{\n  \"hooks\": {{\n    \"Stop\": [{{\"hooks\": [{{\"type\": \"command\", \"command\": \"node \\\"{hook_script_path}\\\"\", \"timeout\": 60}}]}}]\n  }}\n}}\n"
     )
 }
 
@@ -1308,12 +1308,13 @@ pub fn install_agent_hooks(hook_script_path: &str, home: &Path) -> Vec<String> {
     let mut installed = Vec::new();
 
     if is_agent_installed("codex") {
-        let config_path = home.join(".codex").join("config.toml");
-        // Skip if a config already exists to avoid overwriting user settings.
-        if !config_path.exists() {
-            if let Some(parent) = config_path.parent() {
+        // Codex reads hooks from hooks.json, not config.toml.
+        // config.toml is the user's settings file — never overwrite it.
+        let hooks_path = home.join(".codex").join("hooks.json");
+        if !hooks_path.exists() {
+            if let Some(parent) = hooks_path.parent() {
                 if fs::create_dir_all(parent).is_ok()
-                    && fs::write(&config_path, build_codex_hook_config(hook_script_path)).is_ok()
+                    && fs::write(&hooks_path, build_codex_hook_config(hook_script_path)).is_ok()
                 {
                     installed.push("Codex (/cx)".to_string());
                 }
@@ -1346,13 +1347,12 @@ mod agent_hook_tests {
     #[test]
     fn codex_hook_config_contains_hook_script_path() {
         let config = build_codex_hook_config("/usr/local/share/rcc/hooks/claude-stop-hook.mjs");
-        assert!(config.contains("codex_hooks = true"));
+        let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+        assert!(parsed["hooks"]["Stop"].is_array(), "Stop hook must be an array");
         assert!(config.contains("/usr/local/share/rcc/hooks/claude-stop-hook.mjs"));
-        assert!(config.contains("[hooks]"));
-        assert!(config.contains("stop ="));
         // Tool hooks intentionally omitted — relay cannot parse Codex hook names.
-        assert!(!config.contains("pre-tool-use"));
-        assert!(!config.contains("post-tool-use"));
+        assert!(!config.contains("PreToolUse"));
+        assert!(!config.contains("PostToolUse"));
     }
 
     #[test]
