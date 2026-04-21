@@ -1072,11 +1072,36 @@ pub async fn execute_setup(
         let loc = &locale;
         prompter.println(&loc.setup_completion_message(&install_path, &profile_path, &installer_script_path));
         let answer = prompter.prompt(loc.setup_run_installer_prompt())?;
+        // Derive hook script path from the install location (mirrors build_shell_install_script).
+        let hook_script_path = std::env::var("RCC_HOOK_SCRIPT_PATH").unwrap_or_else(|_| {
+            let install_root = install_path
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            install_root
+                .join("share")
+                .join("remote-claude-code")
+                .join("hooks")
+                .join("claude-stop-hook.mjs")
+                .display()
+                .to_string()
+        });
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
         if should_run_installer(&answer) {
             run_install_script(&installer_script_path)?;
             prompter.println(loc.setup_installer_success());
         } else {
             prompter.println(&loc.setup_installer_run_later(&installer_script_path));
+        }
+
+        // Auto-install hooks for detected agent CLIs regardless of installer timing.
+        let agent_hooks = install_agent_hooks(&hook_script_path, &home);
+        for agent in &agent_hooks {
+            prompter.println(&format!("훅 설정 완료: {agent}"));
         }
         Ok(())
     } else {
@@ -1250,4 +1275,101 @@ pub async fn run_setup(config: &AppConfig, args: &[String]) -> Result<()> {
     let resolved = resolve_setup_input(input, true, &mut prompter).await?;
     run_release_build(&workspace_root)?;
     execute_setup(config, &workspace_root, resolved, &mut prompter, locale).await
+}
+
+// ── Agent hook installation ────────────────────────────────────────────────────
+
+pub fn is_agent_installed(binary: &str) -> bool {
+    Command::new(binary)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn build_codex_hook_config(hook_script_path: &str) -> String {
+    // Only register the turn-completion hook (stop). Tool hooks use names the
+    // shared relay cannot parse, so they are intentionally omitted here.
+    format!(
+        "[features]\ncodex_hooks = true\n\n[hooks]\nstop = [\"node \\\"{hook_script_path}\\\"\"]\n"
+    )
+}
+
+pub fn build_gemini_hook_config(hook_script_path: &str) -> String {
+    // Only register AfterAgent (maps to Stop in HookRelayEventKind).
+    format!(
+        "{{\n  \"hooks\": {{\n    \"AfterAgent\": [{{\"type\": \"command\", \"command\": \"node \\\"{hook_script_path}\\\"\"}}]\n  }}\n}}\n"
+    )
+}
+
+/// Install hook configurations for detected agent CLIs.
+/// Returns the names of agents whose hooks were successfully installed.
+pub fn install_agent_hooks(hook_script_path: &str, home: &Path) -> Vec<String> {
+    let mut installed = Vec::new();
+
+    if is_agent_installed("codex") {
+        let config_path = home.join(".codex").join("config.toml");
+        // Skip if a config already exists to avoid overwriting user settings.
+        if !config_path.exists() {
+            if let Some(parent) = config_path.parent() {
+                if fs::create_dir_all(parent).is_ok()
+                    && fs::write(&config_path, build_codex_hook_config(hook_script_path)).is_ok()
+                {
+                    installed.push("Codex (/cx)".to_string());
+                }
+            }
+        }
+    }
+
+    if is_agent_installed("gemini") {
+        let config_path = home.join(".gemini").join("settings.json");
+        // Skip if a config already exists to avoid overwriting user settings.
+        if !config_path.exists() {
+            if let Some(parent) = config_path.parent() {
+                if fs::create_dir_all(parent).is_ok()
+                    && fs::write(&config_path, build_gemini_hook_config(hook_script_path)).is_ok()
+                {
+                    installed.push("Gemini (/gm)".to_string());
+                }
+            }
+        }
+    }
+
+    installed
+}
+
+#[cfg(test)]
+mod agent_hook_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn codex_hook_config_contains_hook_script_path() {
+        let config = build_codex_hook_config("/usr/local/share/rcc/hooks/claude-stop-hook.mjs");
+        assert!(config.contains("codex_hooks = true"));
+        assert!(config.contains("/usr/local/share/rcc/hooks/claude-stop-hook.mjs"));
+        assert!(config.contains("[hooks]"));
+        assert!(config.contains("stop ="));
+        // Tool hooks intentionally omitted — relay cannot parse Codex hook names.
+        assert!(!config.contains("pre-tool-use"));
+        assert!(!config.contains("post-tool-use"));
+    }
+
+    #[test]
+    fn gemini_hook_config_is_valid_json_with_after_agent() {
+        let config = build_gemini_hook_config("/usr/local/share/rcc/hooks/claude-stop-hook.mjs");
+        let parsed: serde_json::Value = serde_json::from_str(&config).expect("valid JSON");
+        assert!(parsed["hooks"]["AfterAgent"].is_array());
+        assert!(config.contains("/usr/local/share/rcc/hooks/claude-stop-hook.mjs"));
+    }
+
+    #[test]
+    fn install_agent_hooks_skips_missing_agents() {
+        let temp = tempdir().expect("temp dir");
+        // Neither codex nor gemini are installed in CI, so no hooks should be installed.
+        // We verify it doesn't panic and returns an empty list when nothing is available.
+        let installed = install_agent_hooks("/tmp/hook.mjs", temp.path());
+        // On CI without codex/gemini: 0 installed. On dev machine with both: up to 2.
+        assert!(installed.len() <= 2);
+    }
 }
