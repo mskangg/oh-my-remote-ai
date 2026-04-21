@@ -29,7 +29,13 @@ impl SlackSessionOrchestrator for PersistingOrchestrator {
         launch_command: String,
     ) -> anyhow::Result<StartedSlackSession> {
         let started = self.inner.start_new_session(channel_id, launch_command.clone()).await?;
-        let _ = self.repository.save_launch_command(started.session_id, &launch_command);
+        if let Err(error) = self.repository.save_launch_command(started.session_id, &launch_command) {
+            tracing::warn!(
+                session_id = %started.session_id.0,
+                error = %error,
+                "failed to persist launch_command; agent recovery after restart may use wrong command"
+            );
+        }
         Ok(started)
     }
 
