@@ -1,6 +1,7 @@
 use crate::types::{SlackMessageTarget, SlackPostedMessage, SlackThreadStatus};
 use slack_morphism::prelude::*;
 
+#[cfg(test)]
 pub(crate) fn parse_thread_reply(envelope: crate::types::SlackEnvelope) -> Option<crate::types::SlackThreadReply> {
     if envelope.bot_id.is_some() {
         return None;
@@ -146,12 +147,9 @@ pub(crate) fn split_for_slack_final_reply(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = text.trim();
 
-    loop {
-        // char_indices().nth() short-circuits at LIMIT — O(LIMIT) per iteration
-        // instead of the O(n) that chars().count() caused (O(n²) total).
-        let Some((byte_limit, _)) = remaining.char_indices().nth(SLACK_FINAL_REPLY_TEXT_LIMIT) else {
-            break;
-        };
+    // char_indices().nth() short-circuits at LIMIT — O(LIMIT) per iteration
+    // instead of the O(n) that chars().count() caused (O(n²) total).
+    while let Some((byte_limit, _)) = remaining.char_indices().nth(SLACK_FINAL_REPLY_TEXT_LIMIT) {
         let slice = &remaining[..byte_limit];
 
         let natural_split = slice

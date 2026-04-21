@@ -83,6 +83,7 @@ pub struct SlackThreadStatus {
     pub status_message_ts: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SlackEnvelope {
     pub(crate) channel: Option<String>,
