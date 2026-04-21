@@ -6,16 +6,17 @@ pub enum CommandRisk {
     ApprovalRequired,
 }
 
+/// Keywords that require explicit user approval before the agent proceeds.
+///
+/// Adding a new keyword is a data change here — `classify` itself never needs
+/// to change (Open–Closed Principle).
+const APPROVAL_REQUIRED_KEYWORDS: &[&str] = &["commit", "delete", "remove", "edit"];
+
 pub fn classify(command: &UserCommand) -> CommandRisk {
     let text = command.text.to_lowercase();
-
-    if text.contains("commit")
-        || text.contains("delete")
-        || text.contains("remove")
-        || text.contains("edit")
-    {
-        return CommandRisk::ApprovalRequired;
+    if APPROVAL_REQUIRED_KEYWORDS.iter().any(|kw| text.contains(kw)) {
+        CommandRisk::ApprovalRequired
+    } else {
+        CommandRisk::Safe
     }
-
-    CommandRisk::Safe
 }

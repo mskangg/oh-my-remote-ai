@@ -23,6 +23,11 @@ use transport_slack::{
 };
 use url::Url;
 
+// Initial text for the Slack status message posted when a new turn begins.
+// This is the per-turn *live* status (updated as tool calls arrive), which is a
+// different UX surface from the per-session *list* label in `SessionState::display_label()`.
+// The two strings are intentionally independent: the list label describes the
+// session state, while this string is the seed text for an ephemeral status bubble.
 const INITIAL_THINKING_STATUS: &str = "⏳ Working...";
 
 #[derive(Debug, Error)]
@@ -120,15 +125,11 @@ where
         binding: &TransportBinding,
         state: &SessionState,
     ) -> Result<(), ApplicationError> {
-        match state {
-            SessionState::Starting | SessionState::Running { .. } | SessionState::Cancelling { .. } => {
-                self.transport
-                    .ensure_working_status(binding, self.publisher.as_ref(), INITIAL_THINKING_STATUS)
-                    .await?;
-            }
-            _ => {}
+        if state.is_in_progress() {
+            self.transport
+                .ensure_working_status(binding, self.publisher.as_ref(), INITIAL_THINKING_STATUS)
+                .await?;
         }
-
         Ok(())
     }
 
@@ -253,8 +254,7 @@ where
                     .transport
                     .handle_thread_action(channel_id, thread_ts, SlackThreadAction::Interrupt)
                     .await?;
-                let _ = self
-                    .transport
+                self.transport
                     .handle_thread_action(
                         channel_id,
                         thread_ts,
@@ -405,14 +405,13 @@ where
             thread_ts: binding.session_space_id,
         };
 
-        match (message, next_state) {
-            (SessionMsg::RuntimeProgress { text }, SessionState::Running { .. })
-            | (SessionMsg::RuntimeProgress { text }, SessionState::Cancelling { .. }) => {
+        match message {
+            SessionMsg::RuntimeProgress { text } if next_state.is_runtime_active() => {
                 self.publisher
                     .update_working_status(&status, &render_progress_status_text(text))
                     .await?;
             }
-            (SessionMsg::RuntimeCompleted { summary, .. }, SessionState::Idle) => {
+            SessionMsg::RuntimeCompleted { summary, .. } if next_state.is_idle() => {
                 // Delete the status message before posting the final reply so that
                 // a failed post_final_reply (e.g. empty summary from /clear) does
                 // not leave a stale Working... message in the thread.
@@ -424,7 +423,7 @@ where
                     self.publisher.post_final_reply(&target, summary).await?;
                 }
             }
-            (SessionMsg::RuntimeFailed { error, .. }, SessionState::Failed { .. }) => {
+            SessionMsg::RuntimeFailed { error, .. } if next_state.is_failed() => {
                 if let Err(del_err) = self.publisher.delete_message(&status).await {
                     tracing::warn!(error = %del_err, "failed to delete working status on failure");
                 }
@@ -559,18 +558,6 @@ fn build_command_palette_blocks() -> Vec<SlackBlock> {
     ]
 }
 
-fn render_state_label(state: &SessionState) -> &'static str {
-    match state {
-        SessionState::Idle => "Ready for next prompt.",
-        SessionState::Starting | SessionState::Running { .. } | SessionState::Cancelling { .. } => {
-            INITIAL_THINKING_STATUS
-        }
-        SessionState::Completed => "Completed.",
-        SessionState::Failed { .. } => "Failed.",
-        SessionState::WaitingForApproval => "Waiting for approval.",
-    }
-}
-
 fn build_session_list_response_text(entries: &[SlackSessionListEntry]) -> String {
     if entries.is_empty() {
         return "No active sessions.".to_string();
@@ -585,7 +572,7 @@ fn build_session_list_response_text(entries: &[SlackSessionListEntry]) -> String
                 index + 1,
                 entry.project_label,
                 entry.thread_ts,
-                render_state_label(&entry.state)
+                entry.state.display_label()
             )
         })
         .collect::<Vec<_>>()
@@ -1508,17 +1495,14 @@ mod tests {
     }
 
     // ── 엣지케이스: 다양한 stale action 타입별 서비스 생존 ────────────────────
-    //
-    // Scenario: 종료된 세션에 Interrupt / SendKey / SendCommand가 와도 프로세스가 죽지 않는다
-    //   Given 바인딩이 없는 세션이 있다
-    //   When Interrupt, SendKey, SendCommand action이 차례로 도착한다
-    //   Then 모두 오류로 처리되고 서비스는 계속 실행된다
-    #[tokio::test]
-    async fn 종료된_세션에_다양한_action_타입이_와도_서비스가_생존한다() {
-        // Given
-        let service = 바인딩_없는_서비스_셋업();
 
-        // When & Then - Interrupt
+    // Scenario: 종료된 세션에 Interrupt가 와도 프로세스가 죽지 않는다
+    //   Given 바인딩이 없는 세션이 있다
+    //   When Interrupt action이 도착한다
+    //   Then 오류로 처리되고 서비스는 계속 실행된다
+    #[tokio::test]
+    async fn 종료된_세션에_interrupt_action이_와도_서비스가_생존한다() {
+        let service = 바인딩_없는_서비스_셋업();
         assert!(
             service
                 .handle_thread_action_internal("C_DEAD", "9999.200", SlackThreadAction::Interrupt)
@@ -1526,8 +1510,15 @@ mod tests {
                 .is_err(),
             "Interrupt stale action은 오류여야 함"
         );
+    }
 
-        // When & Then - SendKey
+    // Scenario: 종료된 세션에 SendKey가 와도 프로세스가 죽지 않는다
+    //   Given 바인딩이 없는 세션이 있다
+    //   When SendKey action이 도착한다
+    //   Then 오류로 처리되고 서비스는 계속 실행된다
+    #[tokio::test]
+    async fn 종료된_세션에_send_key_action이_와도_서비스가_생존한다() {
+        let service = 바인딩_없는_서비스_셋업();
         assert!(
             service
                 .handle_thread_action_internal(
@@ -1539,8 +1530,15 @@ mod tests {
                 .is_err(),
             "SendKey stale action은 오류여야 함"
         );
+    }
 
-        // When & Then - SendCommand
+    // Scenario: 종료된 세션에 SendCommand가 와도 프로세스가 죽지 않는다
+    //   Given 바인딩이 없는 세션이 있다
+    //   When SendCommand action이 도착한다
+    //   Then 오류로 처리되고 서비스는 계속 실행된다
+    #[tokio::test]
+    async fn 종료된_세션에_send_command_action이_와도_서비스가_생존한다() {
+        let service = 바인딩_없는_서비스_셋업();
         assert!(
             service
                 .handle_thread_action_internal(

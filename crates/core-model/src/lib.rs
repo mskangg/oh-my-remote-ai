@@ -69,6 +69,59 @@ pub enum SessionState {
     Failed { reason: String },
 }
 
+impl SessionState {
+    /// One-line label for the session list UI (e.g., "Ready for next prompt.").
+    ///
+    /// Callers must not pattern-match on `SessionState` just to get a display
+    /// string — ask the state to describe itself instead (Tell Don't Ask).
+    ///
+    /// Note: The `application` crate uses a separate `INITIAL_THINKING_STATUS`
+    /// constant for the per-turn live Slack status bubble.  The two strings
+    /// happen to share the same "⏳ Working..." text today but are intentionally
+    /// independent — they describe different UX surfaces and may diverge.
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            Self::Idle => "Ready for next prompt.",
+            Self::Starting | Self::Running { .. } | Self::Cancelling { .. } => "⏳ Working...",
+            Self::Completed => "Completed.",
+            Self::Failed { .. } => "Failed.",
+            Self::WaitingForApproval => "Waiting for approval.",
+        }
+    }
+
+    /// `true` while the session is in a busy phase (Starting, Running, or
+    /// Cancelling).  Use instead of matching on individual variants when the
+    /// caller only cares about "busy vs. not busy", e.g., to decide whether
+    /// to show a working-status indicator in the session list.
+    ///
+    /// Note: `WaitingForApproval` is intentionally excluded — the session is
+    /// blocked on the user, not actively processing work.
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self, Self::Starting | Self::Running { .. } | Self::Cancelling { .. })
+    }
+
+    /// `true` when the runtime is actively emitting events — i.e., a tmux
+    /// session is running and the AI agent has started executing a turn.
+    ///
+    /// Unlike `is_in_progress()`, this excludes `Starting`, which is a
+    /// transient pre-launch phase before the runtime has sent any events.
+    /// Use this predicate in the session-state observer to gate reactions to
+    /// `RuntimeProgress` events: such events cannot arrive during `Starting`.
+    pub fn is_runtime_active(&self) -> bool {
+        matches!(self, Self::Running { .. } | Self::Cancelling { .. })
+    }
+
+    /// `true` when the session is quiescent and ready for the next command.
+    pub fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+
+    /// `true` when the session has entered a terminal failure state.
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserCommand {
     pub text: String,
@@ -91,17 +144,6 @@ impl AgentType {
             "/cx" => Self::Codex,
             "/gm" => Self::Gemini,
             _ => Self::ClaudeCode, // "/cc" and anything else → Claude Code
-        }
-    }
-
-    /// The shell command used to launch this agent in a tmux session.
-    pub fn launch_command(&self, hook_settings_path: &str) -> String {
-        match self {
-            Self::ClaudeCode => format!(
-                "claude --settings {hook_settings_path} --dangerously-skip-permissions"
-            ),
-            Self::Codex => "codex".to_string(),
-            Self::Gemini => "gemini".to_string(),
         }
     }
 
